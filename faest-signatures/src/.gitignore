@@ -1,0 +1,18 @@
+# Rust build output
+target/
+
+# Cargo lock (optional for libraries)
+# Cargo.lock
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Logs
+*.log
+
+# Environment files
+.env
