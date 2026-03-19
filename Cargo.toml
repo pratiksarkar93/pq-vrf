@@ -1,0 +1,9 @@
+[package]
+name = "pq-vrf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+faest = { path = "faest-signatures" }
+rand = { version = "0.8", features = ["std_rng"] }
+rand_chacha = "0.3"
