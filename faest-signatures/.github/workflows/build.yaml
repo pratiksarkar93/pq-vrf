@@ -1,0 +1,108 @@
+name: Rust
+
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        toolchain:
+          - stable
+          - "1.85"
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+    runs-on: ${{matrix.runner}}
+    name: Test with Rust ${{matrix.toolchain}} toolchain on ${{matrix.runner}}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{matrix.toolchain}}
+      - uses: Swatinem/rust-cache@v2
+      - name: Test without default features
+        run: cargo test -r --no-default-features --workspace
+      - name: Test with default features
+        run: cargo test -r --workspace
+      - name: Test with all features
+        run: cargo test -r --all-features --workspace
+
+  test-native:
+    needs: test
+    runs-on: ubuntu-latest
+    name: Test with target-cpu=native
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test with all features
+        run: cargo test -r --all-features --workspace
+    env:
+      RUSTFLAGS: "-C target-cpu=native"
+
+  test-capi:
+    needs: test
+    runs-on: ubuntu-latest
+    name: Test with cargo-c
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-c
+        run: cargo install cargo-c
+      - name: Test with capi
+        run: cargo test -r --features=capi
+      - name: Build with cargo-c
+        run: cargo cbuild -r
+
+  test-cross:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - i686-unknown-linux-gnu
+          - s390x-unknown-linux-gnu
+    name: Cross test for ${{matrix.target}}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{matrix.target}}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cross
+        run: cargo install cross
+      - name: Remove large test vector files
+        run: rm -rvf tests/data/PQCsignKAT*
+      - name: Test with all features
+        run: cross test -r --all-features --workspace --target ${{matrix.target}}
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all --all-features -- -D warnings
