@@ -213,9 +213,12 @@ dependencies = [
 name = "pq-vrf"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "faest",
+ "generic-array 0.14.7",
  "rand",
  "rand_chacha",
+ "sha3",
 ]
 
 [[package]]
