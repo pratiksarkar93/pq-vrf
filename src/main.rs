@@ -1,6 +1,7 @@
 use aes::cipher::{BlockEncrypt, KeyInit};
 use faest::*;
 use generic_array::GenericArray;
+use generic_array::typenum::U16;
 use sha3::{Digest, Sha3_256};
 use rand::RngCore;
 use rand_chacha::ChaCha8Rng;
@@ -45,7 +46,7 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
     VRF{seed, evaluation_key: keypair, verification_key: verifying_key}
 }
 
-fn vrf_evaluate(keypair: &FAEST128fSigningKey, message: &[u8]) -> [u8; 16] {
+fn vrf_evaluate(keypair: &FAEST128fSigningKey, message: &[u8]) -> ([u8; 16], [u8; 16]) {
     // Secret key format: [owf_input (16 bytes), owf_key (16 bytes)]
     let sk_bytes = keypair.to_bytes();
     let owf_key = GenericArray::from_slice(&sk_bytes[16..32]);
@@ -61,11 +62,34 @@ fn vrf_evaluate(keypair: &FAEST128fSigningKey, message: &[u8]) -> [u8; 16] {
         GenericArray::from_slice(&vrf_input).into(),
         GenericArray::from_mut_slice(&mut vrf_output).into(),
     );
+    println!("vrf_output: {:?}", vrf_output);
+    let vrf_proof = vrf_evaluate_proof(&keypair, vrf_input, vrf_output);
+    return (vrf_output, vrf_proof);
+}
+
+fn vrf_evaluate_proof(
+    keypair: &FAEST128fSigningKey,
+    vrf_input: [u8; 16],
+    mut vrf_output: [u8; 16],
+) -> [u8; 16] {
+    let sk_bytes = keypair.to_bytes();
+    let _owf_input = GenericArray::<u8, U16>::from_slice(&sk_bytes[..16]);
+    let owf_key = GenericArray::<u8, U16>::from_slice(&sk_bytes[16..32]);
+    let aes = aes::Aes128Enc::new(owf_key.into());
+    aes.encrypt_block_b2b(
+        GenericArray::<u8, U16>::from_slice(&vrf_input).into(),
+        GenericArray::from_mut_slice(&mut vrf_output).into(),
+    );
     vrf_output
 }
 
-fn vrf_verify(verifying_key: &FAEST128fVerificationKey, message: &[u8], signature: &FAEST128fSignature) {
-   // Prove that the prover knows a secret k s.t. F(0)=verification_key and F(m)= VRF output
+#[allow(dead_code)]
+fn vrf_verify(
+    _verifying_key: &FAEST128fVerificationKey,
+    _message: &[u8],
+    _signature: &FAEST128fSignature,
+) {
+    // Prove that the prover knows a secret k s.t. F(0)=verification_key and F(m)= VRF output
 }
 
 fn main() {

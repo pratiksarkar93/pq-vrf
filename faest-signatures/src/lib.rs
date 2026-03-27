@@ -119,6 +119,8 @@ mod utils;
 mod verifier;
 mod vole;
 mod witness;
+mod witness_vrf;
+pub mod parameter_vrf;
 mod zk_constraints;
 
 use crate::{
@@ -131,6 +133,9 @@ use crate::{
         FAESTParameters, OWFParameters,
     },
 };
+
+pub use parameter_vrf::OWFParametersVrf;
+pub use witness_vrf::aes_extendedwitness_vrf;
 
 #[cfg(all(
     feature = "opt-simd",
