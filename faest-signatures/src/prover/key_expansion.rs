@@ -12,7 +12,7 @@ use crate::{
     universal_hashing::ZKProofHasher,
 };
 
-pub(super) fn key_exp_cstrnts<O>(
+pub(crate) fn key_exp_cstrnts<O>(
     zk_hasher: &mut ZKProofHasher<OWFField<O>>,
     w: ByteCommitsRef<OWFField<O>, O::LKeBytes>,
 ) -> ByteCommits<OWFField<O>, O::R1Times128Bytes>

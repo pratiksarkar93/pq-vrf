@@ -143,7 +143,10 @@ pub use parameter_vrf::{
 };
 pub use witness_vrf::aes_extendedwitness_vrf;
 pub use zk_constraints_vrf::{vrf128f_split_witness_compressed, VRF128F_WITNESS_COMPRESSED_LEN};
-pub use faest::{Faest128fVoleCommitResult, Faest128fVrfProofMaterial};
+pub use faest::{
+    Faest128fVoleCom, Faest128fVoleCommitResult, Faest128fVrfProofMaterial, Faest128fVrfProofPublic,
+    FAEST128F_VRF_PROOF_PUBLIC_BYTES,
+};
 
 #[cfg(all(
     feature = "opt-simd",
@@ -671,6 +674,28 @@ impl FAEST128fSigningKey {
     /// See [`Faest128fVrfProofMaterial`] (includes VOLE `u`, `v`, `com`, `d`, `chall2`).
     pub fn proof_vrf(&self, vrf_input: &[u8; 16], rho: &[u8]) -> Faest128fVrfProofMaterial {
         crate::faest::faest128f_proof_vrf(&self.0, vrf_input, rho)
+    }
+
+    /// Same as [`Self::proof_vrf`] then [`Faest128fVrfProofMaterial::into_public`]: VOLE commitment
+    /// `com` and transcript only (~[`FAEST128F_VRF_PROOF_PUBLIC_BYTES`] B), without `u`, `v`, or BAVC
+    /// decommitment.
+    pub fn proof_vrf_public(&self, vrf_input: &[u8; 16], rho: &[u8]) -> Faest128fVrfProofPublic {
+        self.proof_vrf(vrf_input, rho).into_public()
+    }
+}
+
+impl FAEST128fVerificationKey {
+    /// Verifies [`Faest128fVrfProofPublic`] against this key and `vrf_input`.
+    ///
+    /// Recomputes μ and `chall1` (FAEST `H2^1`) and checks lengths. Does not prove `y = AES_k`
+    /// ([`Faest128fVrfProofPublic::vrf_output`]) — that needs the full Quicksilver/VOLE verify path
+    /// (see [`crate::zk_constraints_vrf::aes_verify_vrf_128f`]).
+    pub fn vrf_proof_verify(
+        &self,
+        vrf_input: &[u8; 16],
+        proof: &Faest128fVrfProofPublic,
+    ) -> Result<(), Error> {
+        crate::faest::faest128f_vrf_proof_verify(&self.0, vrf_input, proof)
     }
 }
 

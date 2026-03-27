@@ -3,7 +3,10 @@ use core::marker::PhantomData;
 #[cfg(not(feature = "std"))]
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 
-use generic_array::{GenericArray, typenum::{U16, U32, Unsigned}};
+use generic_array::{
+    GenericArray,
+    typenum::{Prod, U2, U16, U32, Unsigned},
+};
 use rand_core::CryptoRngCore;
 use sha3::{Digest, Sha3_256};
 
@@ -40,6 +43,29 @@ pub type Faest128fVoleCommitResult = VoleCommitResult<
 
 type Faest128fOwf = <FAEST128fParameters as FAESTParameters>::OWF;
 type Faest128fBP = <Faest128fOwf as OWFParameters>::BaseParams;
+
+#[allow(private_interfaces)]
+type Faest128fVoleComLen = Prod<
+    <<FAEST128fParameters as FAESTParameters>::BAVC as BatchVectorCommitment>::LambdaBytes,
+    U2,
+>;
+
+/// BAVC VOLE commitment `com` for FAEST-128f (2 × λ bytes).
+#[allow(private_interfaces)]
+pub type Faest128fVoleCom = GenericArray<u8, Faest128fVoleComLen>;
+
+/// Total byte length of [`Faest128fVrfProofPublic`] (fixed for FAEST-128f).
+pub const FAEST128F_VRF_PROOF_PUBLIC_BYTES: usize = <Faest128fOwf as OWFParameters>::LambdaBytesTimes2::USIZE
+    + IVSize::USIZE
+    + <<Faest128fOwf as OWFParameters>::LHatBytes as Unsigned>::USIZE
+        * (<<FAEST128fParameters as FAESTParameters>::Tau as TauParameters>::Tau::USIZE - 1)
+    + Faest128fVoleComLen::USIZE
+    + <Faest128fBP as BaseParameters>::Chall1::USIZE
+    + <Faest128fBP as BaseParameters>::VoleHasherOutputLength::USIZE
+    + FAEST128F_VRF_WITNESS_COMPRESSED_LEN
+    + <Faest128fBP as BaseParameters>::Chall::USIZE
+    + FAEST128F_VRF_WITNESS_COMPRESSED_LEN
+    + <Faest128fOwf as OWFParameters>::OutputSize::USIZE;
 
 /// Wraps the prover's signature.
 ///
@@ -566,6 +592,106 @@ pub struct Faest128fVrfProofMaterial {
     pub chall2: GenericArray<u8, <Faest128fBP as BaseParameters>::Chall>,
     /// Compressed dual extended witness: shared key/key-schedule prefix (56 B) + OWF tail + VRF tail.
     pub vrf_witness_compressed: Box<[u8]>,
+    /// VRF output block `y` with `y = AES_k(vrf_input)` for the secret key `k` (same as OWF key).
+    ///
+    /// **Soundness** that this `y` matches the committed witness (without revealing the witness) is
+    /// **not** established by [`faest128f_vrf_proof_verify`] alone — that requires a full FAEST-style
+    /// verify with the dual-AES Quicksilver verifier ([`crate::zk_constraints_vrf::aes_verify_vrf_128f`],
+    /// when implemented) plus VOLE reconstruction and challenges 2–3, analogous to [`faest_verify`].
+    pub vrf_output: GenericArray<u8, <Faest128fOwf as OWFParameters>::OutputSize>,
+}
+
+/// FAEST-128f VRF **public** transcript: VOLE commitment `com`, batch `c` slots, and challenges,
+/// without prover-only VOLE openings (`u`, `v`, [`BavcDecommitment`](crate::bavc::BavcDecommitment))
+/// or PRG seeds (`r`, `vole_r`, `vole_iv`).
+///
+/// Includes the claimed VRF output [`Self::vrf_output`]. [`faest128f_vrf_proof_verify`] checks μ and
+/// `chall1` only; **proving** `y = AES_k(vrf_input)` in zero knowledge needs the completed verifier
+/// path described on [`Faest128fVrfProofMaterial::vrf_output`].
+///
+/// A verifier can recompute `chall1 = H(μ ‖ com ‖ cs ‖ iv)` from the public key and `vrf_input` and
+/// check it against [`Self::chall1`]. Completing the FAEST challenge-2/3 chain uses the same style
+/// of compact VOLE opening as in [`FAEST128fSignature`], not the full prover state in
+/// [`Faest128fVrfProofMaterial`].
+#[allow(private_interfaces)]
+#[derive(Clone, Debug)]
+pub struct Faest128fVrfProofPublic {
+    /// Message-binding hash μ = H(owf_input ‖ owf_output ‖ vrf_input).
+    pub mu: GenericArray<u8, U32>,
+    /// `iv` after `hash_iv` (same input as [`Faest128fVrfProofMaterial::iv`] for [`crate::random_oracles::RandomOracle::hash_challenge_1`]).
+    pub iv: IV,
+    /// Batch commitment `c` slots (same layout as `signature.cs`).
+    pub vole_cs: Box<[u8]>,
+    /// BAVC commitment `com` only (binds VOLE); replaces full [`Faest128fVoleCommitResult`].
+    pub vole_com: Faest128fVoleCom,
+    /// First challenge: H(μ ‖ com ‖ cs ‖ iv).
+    pub chall1: GenericArray<u8, <Faest128fBP as BaseParameters>::Chall1>,
+    /// Compressed `u` via [`BaseParameters::hash_u_vector`].
+    pub u_tilde: GenericArray<u8, <Faest128fBP as BaseParameters>::VoleHasherOutputLength>,
+    /// Masked compressed witness `d = w ⊕ u` (prefix).
+    pub d: Box<[u8]>,
+    /// Second challenge after hashing `d` into the challenge-2 transcript.
+    pub chall2: GenericArray<u8, <Faest128fBP as BaseParameters>::Chall>,
+    /// Compressed dual extended witness.
+    pub vrf_witness_compressed: Box<[u8]>,
+    /// Claimed VRF output `y` (see [`Faest128fVrfProofMaterial::vrf_output`]).
+    pub vrf_output: GenericArray<u8, <Faest128fOwf as OWFParameters>::OutputSize>,
+}
+
+impl Faest128fVrfProofPublic {
+    /// Sum of all byte buffers (equals [`FAEST128F_VRF_PROOF_PUBLIC_BYTES`] for FAEST-128f).
+    #[inline]
+    pub fn total_bytes(&self) -> usize {
+        let n = self.mu.len()
+            + self.iv.len()
+            + self.vole_cs.len()
+            + self.vole_com.len()
+            + self.chall1.len()
+            + self.u_tilde.len()
+            + self.d.len()
+            + self.chall2.len()
+            + self.vrf_witness_compressed.len()
+            + self.vrf_output.len();
+        debug_assert_eq!(n, FAEST128F_VRF_PROOF_PUBLIC_BYTES);
+        n
+    }
+}
+
+impl Faest128fVrfProofMaterial {
+    /// Drops prover-only VOLE state ([`VoleCommitResult::u`], [`VoleCommitResult::v`],
+    /// [`VoleCommitResult::decom`](VoleCommitResult::decom)) and PRG seeds, keeping the public
+    /// commitment and transcript. See [`Faest128fVrfProofPublic`].
+    pub fn into_public(self) -> Faest128fVrfProofPublic {
+        let VoleCommitResult { com: vole_com, .. } = self.vole;
+        Faest128fVrfProofPublic {
+            mu: self.mu,
+            iv: self.iv,
+            vole_cs: self.vole_cs,
+            vole_com,
+            chall1: self.chall1,
+            u_tilde: self.u_tilde,
+            d: self.d,
+            chall2: self.chall2,
+            vrf_witness_compressed: self.vrf_witness_compressed,
+            vrf_output: self.vrf_output,
+        }
+    }
+
+    /// Same as [`Self::into_public`], cloning `vole_cs`, `d`, and `vrf_witness_compressed`.
+    pub fn to_public(&self) -> Faest128fVrfProofPublic {
+        Faest128fVrfProofPublic {
+            mu: self.mu,
+            iv: self.iv,
+            vole_cs: self.vole_cs.clone(),
+            vole_com: self.vole.com,
+            chall1: self.chall1,
+            u_tilde: self.u_tilde,
+            d: self.d.clone(),
+            chall2: self.chall2,
+            vrf_witness_compressed: self.vrf_witness_compressed.clone(),
+            vrf_output: self.vrf_output,
+        }
+    }
 }
 
 /// XORs the compressed VRF witness `w` with the VOLE long vector `u` (length `LHatBytes`).
@@ -680,7 +806,68 @@ pub(crate) fn faest128f_proof_vrf(
         d,
         chall2,
         vrf_witness_compressed,
+        vrf_output,
     }
+}
+
+/// Verifies the **public** VRF transcript ([`Faest128fVrfProofPublic`]).
+///
+/// Performs the checks available **without** the VOLE matrix `v` or BAVC opening:
+///
+/// 1. `proof.d` and `proof.vrf_witness_compressed` each have length
+///    [`FAEST128F_VRF_WITNESS_COMPRESSED_LEN`].
+/// 2. `proof.vole_cs` has length `L̂ · (τ − 1)` for FAEST-128f (same layout as `signature.cs`).
+/// 3. **Message binding:** `μ = H(owf_input ‖ owf_output ‖ vrf_input)`.
+/// 4. **First challenge:** `chall1 = H(μ ‖ com ‖ cs ‖ iv)` (FAEST `H2^1`).
+///
+/// This does **not** validate `u_tilde`, `chall2`, or the masked witness `d` against VOLE / Quicksilver
+/// (that needs `v` or the compact opening used in [`FAEST128fSignature`] verification).
+///
+/// It also does **not** cryptographically tie [`Faest128fVrfProofPublic::vrf_output`] to the secret key
+/// or witness — that requires the full dual-AES Quicksilver verify ([`crate::zk_constraints_vrf::aes_verify_vrf_128f`],
+/// currently unimplemented) and the same VOLE/challenge-3 machinery as [`faest_verify`].
+///
+/// External callers should use [`FAEST128fVerificationKey::vrf_proof_verify`](crate::FAEST128fVerificationKey::vrf_proof_verify).
+pub(crate) fn faest128f_vrf_proof_verify(
+    pk: &PublicKey<Faest128fOwf>,
+    vrf_input: &[u8; 16],
+    proof: &Faest128fVrfProofPublic,
+) -> Result<(), Error> {
+    if proof.d.len() != FAEST128F_VRF_WITNESS_COMPRESSED_LEN
+        || proof.vrf_witness_compressed.len() != FAEST128F_VRF_WITNESS_COMPRESSED_LEN
+    {
+        return Err(Error::new());
+    }
+    let cs_len = <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::LHatBytes::USIZE
+        * (<<FAEST128fParameters as FAESTParameters>::Tau as TauParameters>::Tau::USIZE - 1);
+    if proof.vole_cs.len() != cs_len {
+        return Err(Error::new());
+    }
+
+    let mut mu = GenericArray::<u8, <Faest128fOwf as OWFParameters>::LambdaBytesTimes2>::default();
+    RO::<FAEST128fParameters>::hash_mu(
+        mu.as_mut_slice(),
+        pk.owf_input.as_slice(),
+        pk.owf_output.as_slice(),
+        vrf_input.as_slice(),
+    );
+    if mu != proof.mu {
+        return Err(Error::new());
+    }
+
+    let mut chall1 = GenericArray::<u8, <Faest128fBP as BaseParameters>::Chall1>::default();
+    RO::<FAEST128fParameters>::hash_challenge_1(
+        chall1.as_mut_slice(),
+        mu.as_slice(),
+        proof.vole_com.as_slice(),
+        proof.vole_cs.as_ref(),
+        proof.iv.as_slice(),
+    );
+    if chall1 != proof.chall1 {
+        return Err(Error::new());
+    }
+
+    Ok(())
 }
 
 #[inline]
@@ -976,5 +1163,23 @@ mod test {
 
         #[instantiate_tests(<FAESTEM256sParameters, FAESTEM256fParameters>)]
         mod faest_em_256 {}
+    }
+}
+
+#[cfg(test)]
+mod vrf_proof_public_verify_tests {
+    use crate::{FAEST128fSigningKey, KeypairGenerator};
+    use nist_pqc_seeded_rng::NistPqcAes256CtrRng;
+    use rand_core::SeedableRng;
+    use signature::Keypair;
+
+    #[test]
+    fn vrf_public_proof_accepts_valid() {
+        let mut rng = NistPqcAes256CtrRng::seed_from_u64(42);
+        let sk = FAEST128fSigningKey::generate(&mut rng);
+        let vk = sk.verifying_key();
+        let vrf_input = [7u8; 16];
+        let proof = sk.proof_vrf_public(&vrf_input, &[]);
+        vk.vrf_proof_verify(&vrf_input, &proof).unwrap();
     }
 }

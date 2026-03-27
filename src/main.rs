@@ -48,7 +48,10 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
     VRF{seed, evaluation_key: keypair, verification_key: verifying_key}
 }
 
-fn vrf_evaluate(keypair: &FAEST128fSigningKey, message: &[u8]) -> ([u8; 16], [u8; 16]) {
+fn vrf_evaluate(
+    keypair: &FAEST128fSigningKey,
+    message: &[u8],
+) -> ([u8; 16], Faest128fVrfProofPublic) {
     // `ByteEncoding` for FAEST-128f signing key: 32 bytes = owf_input ‖ owf_key (see `lib_vrf.rs` / `internal_keys`).
     let sk_bytes = keypair.to_bytes();
     let owf_key = GenericArray::from_slice(&sk_bytes[16..32]);
@@ -66,32 +69,66 @@ fn vrf_evaluate(keypair: &FAEST128fSigningKey, message: &[u8]) -> ([u8; 16], [u8
     );
     println!("vrf_output: {:?}", vrf_output);
     let vrf_proof = vrf_evaluate_proof(keypair, vrf_input, vrf_output);
-    return (vrf_output, vrf_proof);
+    (vrf_output, vrf_proof)
+}
+
+/// Prints [`Faest128fVrfProofPublic`] (VOLE `com` + `cs` + challenges; no full `u`/`v`/BAVC decommitment).
+fn print_vrf_proof_public(prep: &Faest128fVrfProofPublic) {
+    println!("--- VRF public proof (Faest128fVrfProofPublic) ---");
+    println!(
+        "  total payload: {} B (constant {} B)",
+        prep.total_bytes(),
+        FAEST128F_VRF_PROOF_PUBLIC_BYTES
+    );
+    println!("  mu (32 B):     {:02x?}", prep.mu.as_slice());
+    println!("  iv (16 B):     {:02x?}", prep.iv.as_slice());
+    println!("  vole_cs len:   {} B", prep.vole_cs.len());
+    println!("  vole_com:      {:02x?}", prep.vole_com.as_slice());
+    println!("  chall1:        {:02x?}", prep.chall1.as_slice());
+    println!("  u_tilde:       {:02x?}", prep.u_tilde.as_slice());
+    println!(
+        "  d (masked w):  {} B, first 24 B {:02x?}",
+        prep.d.len(),
+        &prep.d[..24.min(prep.d.len())]
+    );
+    println!("  chall2:        {:02x?}", prep.chall2.as_slice());
+    println!("  vrf_output y:  {:02x?}", prep.vrf_output.as_slice());
+    println!(
+        "  vrf_witness_compressed: {} B, first 24 B {:02x?}",
+        prep.vrf_witness_compressed.len(),
+        &prep.vrf_witness_compressed[..24.min(prep.vrf_witness_compressed.len())]
+    );
+    println!("--- end VRF public proof ---");
 }
 
 fn vrf_evaluate_proof(
     keypair: &FAEST128fSigningKey,
     vrf_input: [u8; 16],
     vrf_output: [u8; 16],
-) -> [u8; 16] {
-    // `FAEST128fSigningKey::proof_vrf` → `faest128f_proof_vrf` in `faest.rs`: μ, r, iv + dual-AES witness.
+) -> Faest128fVrfProofPublic {
+    // `proof_vrf_public`: μ, iv, VOLE `com` + batch `cs`, challenges, `d` (no `u`/`v`/BAVC tree).
     let rho = &[];
-    let prep = keypair.proof_vrf(&vrf_input, rho);
-    let witness_compressed = prep.vrf_witness_compressed;
+    let prep = keypair.proof_vrf_public(&vrf_input, rho);
+    debug_assert_eq!(prep.vrf_output.as_slice(), vrf_output.as_slice());
+    let witness_compressed = &prep.vrf_witness_compressed;
     debug_assert_eq!(witness_compressed.len(), FAEST128F_VRF_WITNESS_COMPRESSED_LEN);
-    debug_assert!(vrf128f_split_witness_compressed(&witness_compressed).is_some());
+    debug_assert!(vrf128f_split_witness_compressed(witness_compressed).is_some());
 
-
-    vrf_output
+    print_vrf_proof_public(&prep);
+    prep
 }
 
-#[allow(dead_code)]
-fn vrf_verify(
-    _verifying_key: &FAEST128fVerificationKey,
-    _message: &[u8],
-    _signature: &FAEST128fSignature,
-) {
-    // Prove that the prover knows a secret k s.t. F(0)=verification_key and F(m)= VRF output
+/// Recomputes `vrf_input` from `message` (same as [`vrf_evaluate`]) and checks μ + `chall1` on
+/// [`Faest128fVrfProofPublic`] (see [`FAEST128fVerificationKey::vrf_proof_verify`]).
+fn vrf_proof_verify(
+    verifying_key: &FAEST128fVerificationKey,
+    message: &[u8],
+    proof: &Faest128fVrfProofPublic,
+) -> Result<(), faest::Error> {
+    let vrf_input: [u8; 16] = Sha3_256::digest(message)[..16]
+        .try_into()
+        .unwrap();
+    verifying_key.vrf_proof_verify(&vrf_input, proof)
 }
 
 fn main() {
@@ -103,13 +140,14 @@ fn main() {
 
     let vrf3 = vrf_keygen();
 
-    let vrf1_output1 = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
-    let vrf1_output2 = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
-    let vrf2_output1 = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
-    let vrf2_output2 = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
+    let (vrf1_output1, vrf1_proof) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let (vrf1_output2, _) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    vrf_proof_verify(&vrf1.verification_key, MESSAGE.as_bytes(), &vrf1_proof).expect("VRF public proof");
+    let (vrf2_output1, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
+    let (vrf2_output2, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
 
-    let vrf3_output1 = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
-    let vrf3_output2 = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
+    let (vrf3_output1, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
+    let (vrf3_output2, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
 
 
     assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");
