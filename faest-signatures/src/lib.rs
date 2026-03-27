@@ -121,7 +121,9 @@ mod vole;
 mod witness;
 mod witness_vrf;
 pub mod parameter_vrf;
+pub mod prover_vrf;
 mod zk_constraints;
+mod zk_constraints_vrf;
 
 use crate::{
     faest::{faest_keygen, faest_sign, faest_unpacked_sign, faest_verify},
@@ -134,8 +136,12 @@ use crate::{
     },
 };
 
-pub use parameter_vrf::OWFParametersVrf;
+pub use parameter_vrf::{
+    faest128f_aes_extendedwitness_vrf, FAEST128F_EXTENDED_WITNESS_BYTES,
+    FAEST128F_WITNESS_KEY_PREFIX_BYTES, OWFParametersVrf,
+};
 pub use witness_vrf::aes_extendedwitness_vrf;
+pub use zk_constraints_vrf::{vrf128f_split_witness_compressed, VRF128F_WITNESS_COMPRESSED_LEN};
 
 #[cfg(all(
     feature = "opt-simd",
