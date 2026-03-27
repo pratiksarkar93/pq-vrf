@@ -6,8 +6,9 @@
 #[path = "lib_vrf.rs"]
 mod lib_vrf;
 pub use lib_vrf::{
+    compress_faest128f_vrf_extendedwitness, decompress_faest128f_vrf_extendedwitness,
     faest128f_aes_extendedwitness_vrf, FAEST128F_EXTENDED_WITNESS_BYTES,
-    FAEST128F_WITNESS_KEY_PREFIX_BYTES,
+    FAEST128F_VRF_WITNESS_COMPRESSED_LEN, FAEST128F_WITNESS_KEY_PREFIX_BYTES,
 };
 
 #[cfg(not(feature = "std"))]

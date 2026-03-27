@@ -88,7 +88,7 @@ extern crate alloc;
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, vec::Vec};
 
-use generic_array::{GenericArray, typenum::Unsigned};
+use generic_array::{GenericArray, typenum::{U16, U32, Unsigned}};
 use pastey::paste;
 use rand_core::CryptoRngCore;
 #[cfg(any(feature = "randomized-signer", feature = "capi"))]
@@ -137,11 +137,13 @@ use crate::{
 };
 
 pub use parameter_vrf::{
+    compress_faest128f_vrf_extendedwitness, decompress_faest128f_vrf_extendedwitness,
     faest128f_aes_extendedwitness_vrf, FAEST128F_EXTENDED_WITNESS_BYTES,
-    FAEST128F_WITNESS_KEY_PREFIX_BYTES, OWFParametersVrf,
+    FAEST128F_VRF_WITNESS_COMPRESSED_LEN, FAEST128F_WITNESS_KEY_PREFIX_BYTES, OWFParametersVrf,
 };
 pub use witness_vrf::aes_extendedwitness_vrf;
 pub use zk_constraints_vrf::{vrf128f_split_witness_compressed, VRF128F_WITNESS_COMPRESSED_LEN};
+pub use faest::{Faest128fVoleCommitResult, Faest128fVrfProofMaterial};
 
 #[cfg(all(
     feature = "opt-simd",
@@ -644,6 +646,34 @@ macro_rules! define_impl {
 }
 
 define_impl!(FAEST128f);
+
+impl FAEST128fSigningKey {
+    /// Message binding `μ` and VOLE PRG inputs `r`, `iv` as in FAEST signing (steps 3–5), before ZK.
+    ///
+    /// `μ` hashes `(owf_input, owf_output, msg)`. `r` and the IV pre-state come from `hash_r_iv` on
+    /// `(owf_key, μ, ρ)`; `iv` is `hash_iv` of that pre-state. Matches [`Signer::sign`] when `ρ` is empty.
+    pub fn mu_r_iv_vrf(
+        &self,
+        msg: &[u8],
+        rho: &[u8],
+    ) -> (
+        GenericArray<u8, U32>,
+        GenericArray<u8, U16>,
+        GenericArray<u8, U16>,
+    ) {
+        crate::faest::mu_r_iv_vrf::<FAEST128fParameters>(msg, &self.0, rho)
+    }
+
+    /// VRF proof preparation: [`mu_r_iv_vrf`](Self::mu_r_iv_vrf) with `msg = vrf_input`, dual-AES witness (compressed),
+    /// VOLE, `chall1` / `u_tilde`, masked witness `d`, and `chall2` (dual AES Quicksilver proving is still in
+    /// [`crate::zk_constraints_vrf`]).
+    ///
+    /// See [`Faest128fVrfProofMaterial`] (includes VOLE `u`, `v`, `com`, `d`, `chall2`).
+    pub fn proof_vrf(&self, vrf_input: &[u8; 16], rho: &[u8]) -> Faest128fVrfProofMaterial {
+        crate::faest::faest128f_proof_vrf(&self.0, vrf_input, rho)
+    }
+}
+
 define_impl!(FAEST128s);
 define_impl!(FAEST192f);
 define_impl!(FAEST192s);

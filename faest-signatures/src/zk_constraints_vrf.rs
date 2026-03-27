@@ -8,6 +8,12 @@
 //! (56 for FAEST-128f). The first **`P`** bytes are the **shared** key + key-schedule extended
 //! witness; the remainder is two plaintext-dependent tails (OWF trace, then VRF trace).
 //!
+//! **Before** Quicksilver over this witness (same order as stock FAEST [`crate::faest::sign`]):
+//! 1. **Message binding:** `μ` hashes `(owf_input, owf_output, vrf_input)` — the FAEST message is the
+//!    16-byte VRF block `vrf_input`, not a separate arbitrary-length message.
+//! 2. **VOLE randomness:** `r` and `iv` come from `ρ` via `hash_r_iv` and `hash_iv`, driving the VOLE
+//!    PRG seed (`volecommit`). Use [`FAEST128fSigningKey::mu_r_iv_vrf`] with that `vrf_input` and `ρ`.
+//!
 //! This module is a **fork** of [`crate::zk_constraints`]: stock [`crate::zk_constraints::aes_prove`]
 //! is wired to **one** `O::LBytes` witness. VRF proving must run Quicksilver over **both** AES
 //! evaluation paths while committing to the shared prefix **once** (see [`crate::prover_vrf`]).
@@ -17,12 +23,12 @@
 //! that module is filled in.
 
 use crate::{
-    FAEST128F_EXTENDED_WITNESS_BYTES, FAEST128F_WITNESS_KEY_PREFIX_BYTES,
+    FAEST128F_EXTENDED_WITNESS_BYTES, FAEST128F_VRF_WITNESS_COMPRESSED_LEN,
+    FAEST128F_WITNESS_KEY_PREFIX_BYTES,
 };
 
 /// Length of `witness_compressed` for FAEST-128f (264 bytes): one shared prefix, two tails.
-pub const VRF128F_WITNESS_COMPRESSED_LEN: usize =
-    2 * FAEST128F_EXTENDED_WITNESS_BYTES - FAEST128F_WITNESS_KEY_PREFIX_BYTES;
+pub const VRF128F_WITNESS_COMPRESSED_LEN: usize = FAEST128F_VRF_WITNESS_COMPRESSED_LEN;
 
 /// Splits `witness_compressed` into shared prefix, OWF encryption trace, VRF encryption trace.
 ///

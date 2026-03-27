@@ -3,7 +3,7 @@
 #![allow(missing_docs)]
 
 #[cfg(not(feature = "std"))]
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 
 use generic_array::GenericArray;
 use signature::Keypair;
@@ -23,6 +23,40 @@ pub const FAEST128F_EXTENDED_WITNESS_BYTES: usize = 160;
 /// The same prefix appears in both halves of [`crate::witness_vrf::aes_extendedwitness_vrf`] and can
 /// be stored once when compressing.
 pub const FAEST128F_WITNESS_KEY_PREFIX_BYTES: usize = 56;
+
+/// Length of the compressed dual extended witness: one shared prefix + OWF tail + VRF tail.
+pub const FAEST128F_VRF_WITNESS_COMPRESSED_LEN: usize =
+    2 * FAEST128F_EXTENDED_WITNESS_BYTES - FAEST128F_WITNESS_KEY_PREFIX_BYTES;
+
+/// Compresses `full` (`2 * FAEST128F_EXTENDED_WITNESS_BYTES` bytes = two concatenated AES extended witnesses).
+///
+/// Drops the duplicate key + key-schedule prefix from the second half; layout is
+/// `[prefix P][tail_owf L−P][tail_vrf L−P]` with `P` = [`FAEST128F_WITNESS_KEY_PREFIX_BYTES`],
+/// `L` = [`FAEST128F_EXTENDED_WITNESS_BYTES`].
+pub fn compress_faest128f_vrf_extendedwitness(full: &[u8]) -> Box<[u8]> {
+    const L: usize = FAEST128F_EXTENDED_WITNESS_BYTES;
+    const P: usize = FAEST128F_WITNESS_KEY_PREFIX_BYTES;
+    debug_assert_eq!(full.len(), 2 * L);
+    let mut out = Vec::with_capacity(FAEST128F_VRF_WITNESS_COMPRESSED_LEN);
+    out.extend_from_slice(&full[..P]);
+    out.extend_from_slice(&full[P..L]);
+    out.extend_from_slice(&full[L + P..2 * L]);
+    debug_assert_eq!(out.len(), FAEST128F_VRF_WITNESS_COMPRESSED_LEN);
+    out.into_boxed_slice()
+}
+
+/// Inverse of [`compress_faest128f_vrf_extendedwitness`]: restores the full `2 * L` byte witness.
+pub fn decompress_faest128f_vrf_extendedwitness(compressed: &[u8]) -> Box<[u8]> {
+    const L: usize = FAEST128F_EXTENDED_WITNESS_BYTES;
+    const P: usize = FAEST128F_WITNESS_KEY_PREFIX_BYTES;
+    debug_assert_eq!(compressed.len(), FAEST128F_VRF_WITNESS_COMPRESSED_LEN);
+    let mut out = Vec::with_capacity(2 * L);
+    out.extend_from_slice(&compressed[..L]);
+    out.extend_from_slice(&compressed[..P]);
+    out.extend_from_slice(&compressed[L..]);
+    debug_assert_eq!(out.len(), 2 * L);
+    out.into_boxed_slice()
+}
 
 /// FAEST-128f only: builds the VRF extended witness (two concatenated AES extended witnesses).
 ///

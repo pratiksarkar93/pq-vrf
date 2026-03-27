@@ -1,17 +1,18 @@
 use core::marker::PhantomData;
 
 #[cfg(not(feature = "std"))]
-use alloc::borrow::ToOwned;
+use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 
-use generic_array::{GenericArray, typenum::Unsigned};
+use generic_array::{GenericArray, typenum::{U16, U32, Unsigned}};
 use rand_core::CryptoRngCore;
+use sha3::{Digest, Sha3_256};
 
 use crate::{
     Error, UnpackedSecretKey,
     bavc::{BatchVectorCommitment, BavcOpenResult},
     fields::Field,
     internal_keys::{PublicKey, SecretKey},
-    parameter::{BaseParameters, FAESTParameters, OWFParameters, TauParameters, Witness},
+    parameter::{BaseParameters, FAEST128fParameters, FAESTParameters, OWFParameters, TauParameters, Witness},
     prg::{IV, IVSize},
     random_oracles::{Hasher, RandomOracle},
     utils::{Reader, decode_all_chall_3, xor_arrays_into},
@@ -19,10 +20,26 @@ use crate::{
         VoleCommitResult, VoleCommitmentCRef, VoleCommitmentCRefMut, VoleReconstructResult,
         volecommit, volereconstruct,
     },
+    parameter_vrf::{
+        compress_faest128f_vrf_extendedwitness, FAEST128F_VRF_WITNESS_COMPRESSED_LEN,
+    },
+    witness_vrf::aes_extendedwitness_vrf,
 };
 
 type RO<P> =
     <<<P as FAESTParameters>::OWF as OWFParameters>::BaseParams as BaseParameters>::RandomOracle;
+
+/// VOLE commitment result for FAEST-128f: `u` (long VOLE vector), `v` (constraint rows, same shape as
+/// Quicksilver `CstrntsVal`: Λ rows × `LHatBytes` bytes per row), batch `com`, and BAVC `decom`.
+#[allow(private_interfaces)]
+pub type Faest128fVoleCommitResult = VoleCommitResult<
+    <<FAEST128fParameters as FAESTParameters>::BAVC as BatchVectorCommitment>::LambdaBytes,
+    <<FAEST128fParameters as FAESTParameters>::BAVC as BatchVectorCommitment>::NLeafCommit,
+    <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::LHatBytes,
+>;
+
+type Faest128fOwf = <FAEST128fParameters as FAESTParameters>::OWF;
+type Faest128fBP = <Faest128fOwf as OWFParameters>::BaseParams;
 
 /// Wraps the prover's signature.
 ///
@@ -479,6 +496,191 @@ where
     }
 
     Err(Error::new())
+}
+
+/// Message binding `μ` and VOLE PRG inputs `r`, `iv` as in [`sign`] (steps 3–5), **before** ZK / witness masking.
+///
+/// `μ` hashes `(owf_input, owf_output, msg)`. `r` and the IV pre-state come from the FAEST `hash_r_iv` step on
+/// `(owf_key, μ, ρ)`; `iv` is `hash_iv` of that pre-state. These drive `volecommit` in [`sign`].
+///
+/// With `ρ = []` this matches deterministic signing ([`crate::Signer::sign`] default randomness).
+
+pub(crate) fn mu_r_iv_vrf<P>(
+    msg: &[u8],
+    sk: &SecretKey<P::OWF>,
+    rho: &[u8],
+) -> (
+    GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>,
+    GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
+    IV,
+)
+where
+    P: FAESTParameters,
+{
+    let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
+    RO::<P>::hash_mu(&mut mu, &sk.pk.owf_input, &sk.pk.owf_output, msg);
+
+    let mut r = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytes>::default();
+    let mut iv_pre = IV::default();
+    RO::<P>::hash_r_iv(&mut r, &mut iv_pre, &sk.owf_key, &mu, rho);
+
+    let mut iv = iv_pre;
+    RO::<P>::hash_iv(&mut iv);
+
+    (mu, r, iv)
+}
+
+/// FAEST-128f VRF: μ / `r` / `iv`, **VOLE** (`u`, `v`, `com`, `decom`), and the **compressed** dual-AES witness.
+///
+/// Runs [`mu_r_iv_vrf`] with `msg = vrf_input` (16-byte VRF block), builds the extended witness and
+/// [`compress_faest128f_vrf_extendedwitness`](crate::parameter_vrf::compress_faest128f_vrf_extendedwitness),
+/// then derives **VOLE-only** seeds [`vrf_fold_vole_r_iv`] from `(r, iv, vrf_witness_compressed)` and runs
+/// [`volecommit`](crate::vole::volecommit) on the batch `c` slots (same layout as `signature.cs`).
+/// Stock FAEST `sign` uses `r`,`iv` directly; the VRF path binds VOLE to the **compressed** witness bytes.
+///
+/// Then [`hash_challenge_1`], compressed `u` → `u_tilde`, [`hash_v_matrix`], masked witness `d`, and
+/// [`FaestHash::hash_challenge_2_finalize`] to `chall2` (same as [`sign`] steps 8–11, 13–14).
+#[allow(private_interfaces)]
+pub struct Faest128fVrfProofMaterial {
+    /// Message-binding hash μ = H(owf_input ‖ owf_output ‖ vrf_input).
+    pub mu: GenericArray<u8, U32>,
+    /// `r` from FAEST `hash_r_iv` (before folding to VOLE).
+    pub r: GenericArray<u8, U16>,
+    /// `iv` after `hash_iv` (before folding to VOLE); used in [`hash_challenge_1`] with `com`, `cs` (cf. `sign`).
+    pub iv: IV,
+    /// Seeds actually passed to [`volecommit`]: derived from `r`, `iv`, and `vrf_witness_compressed`.
+    pub vole_r: GenericArray<u8, U16>,
+    /// IV paired with [`Self::vole_r`] for [`volecommit`].
+    pub vole_iv: IV,
+    /// Batch commitment `c` slots written by [`volecommit`] (same layout as `signature.cs`).
+    pub vole_cs: Box<[u8]>,
+    /// Committed random linear system: long vector `u`, matrix `v` (constraint rows), `com`, `decom`.
+    pub vole: Faest128fVoleCommitResult,
+    /// First challenge: H(μ ‖ com ‖ cs ‖ iv) (FAEST `H2^1`).
+    pub chall1: GenericArray<u8, <Faest128fBP as BaseParameters>::Chall1>,
+    /// Compressed `u` via [`BaseParameters::hash_u_vector`] (same as `signature.u_tilde`).
+    pub u_tilde: GenericArray<u8, <Faest128fBP as BaseParameters>::VoleHasherOutputLength>,
+    /// Masked compressed witness `d = w ⊕ u` on the prefix where `u` exists; see [`mask_vrf_witness_compressed`].
+    pub d: Box<[u8]>,
+    /// Second challenge `chall2` after hashing `d` into the challenge-2 transcript.
+    pub chall2: GenericArray<u8, <Faest128fBP as BaseParameters>::Chall>,
+    /// Compressed dual extended witness: shared key/key-schedule prefix (56 B) + OWF tail + VRF tail.
+    pub vrf_witness_compressed: Box<[u8]>,
+}
+
+/// XORs the compressed VRF witness `w` with the VOLE long vector `u` (length `LHatBytes`).
+///
+/// Stock [`SignatureRefMut::mask_witness`] XORs `LBytes` of witness with `u[..LBytes]`. Here `w` is
+/// [`FAEST128F_VRF_WITNESS_COMPRESSED_LEN`] bytes while `u` is shorter; we XOR `w[..u.len()]` with
+/// `u` and copy `w[u.len()..]` into `d` (same as XOR against `u` zero-padded to `w.len()`).
+fn mask_vrf_witness_compressed(d: &mut [u8], w: &[u8], u: &[u8]) {
+    debug_assert_eq!(d.len(), FAEST128F_VRF_WITNESS_COMPRESSED_LEN);
+    debug_assert_eq!(w.len(), FAEST128F_VRF_WITNESS_COMPRESSED_LEN);
+    let n = u.len().min(w.len());
+    xor_arrays_into(&mut d[..n], &w[..n], &u[..n]);
+    if n < w.len() {
+        d[n..].copy_from_slice(&w[n..]);
+    }
+}
+
+/// Derives VOLE PRG inputs from FAEST `r`,`iv` and the **compressed** VRF witness (not the full 2×`L` bytes).
+///
+/// This is the VRF-specific binding: [`volecommit`](crate::vole::volecommit) uses `vole_r`,`vole_iv` from
+/// here so the batch commitment is keyed to the compressed witness representation.
+fn vrf_fold_vole_r_iv(
+    r: &GenericArray<u8, U16>,
+    iv: &IV,
+    witness_compressed: &[u8],
+) -> (GenericArray<u8, U16>, IV) {
+    let mut h = Sha3_256::new();
+    h.update(b"FAEST-VRF VOLE|v1|");
+    h.update(r);
+    h.update(iv);
+    h.update((witness_compressed.len() as u64).to_le_bytes());
+    h.update(witness_compressed);
+    let d = h.finalize();
+    let mut r_v = GenericArray::<u8, U16>::default();
+    r_v.copy_from_slice(&d[..16]);
+    let mut iv_v = IV::default();
+    iv_v.copy_from_slice(&d[16..32]);
+    (r_v, iv_v)
+}
+
+/// See [`Faest128fVrfProofMaterial`]. External code should use [`FAEST128fSigningKey::proof_vrf`](crate::FAEST128fSigningKey::proof_vrf).
+pub(crate) fn faest128f_proof_vrf(
+    sk: &SecretKey<<FAEST128fParameters as FAESTParameters>::OWF>,
+    vrf_input: &[u8; 16],
+    rho: &[u8],
+) -> Faest128fVrfProofMaterial {
+    type Owf = <FAEST128fParameters as FAESTParameters>::OWF;
+    let (mu, r, iv) = mu_r_iv_vrf::<FAEST128fParameters>(vrf_input.as_slice(), sk, rho);
+
+    let vrf_input_ga = GenericArray::from_slice(vrf_input.as_slice());
+    let mut vrf_output = GenericArray::<u8, <Owf as OWFParameters>::OutputSize>::default();
+    Owf::evaluate_owf(
+        sk.owf_key.as_slice(),
+        vrf_input_ga.as_slice(),
+        vrf_output.as_mut_slice(),
+    );
+    let vrf_witness_full = aes_extendedwitness_vrf::<Owf>(
+        &sk.owf_key,
+        &sk.pk.owf_input,
+        &sk.pk.owf_output,
+        vrf_input_ga,
+        &vrf_output,
+    );
+    let vrf_witness_compressed = compress_faest128f_vrf_extendedwitness(&vrf_witness_full);
+    let (vole_r, vole_iv) = vrf_fold_vole_r_iv(&r, &iv, &vrf_witness_compressed);
+
+    let cs_len = <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::LHatBytes::USIZE
+        * (<<FAEST128fParameters as FAESTParameters>::Tau as TauParameters>::Tau::USIZE - 1);
+    let mut cs_buf = vec![0u8; cs_len];
+    let vole = volecommit::<
+        <FAEST128fParameters as FAESTParameters>::BAVC,
+        <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::LHatBytes,
+    >(
+        VoleCommitmentCRefMut::new(&mut cs_buf),
+        &vole_r,
+        &vole_iv,
+    );
+    let vole_cs = cs_buf.into_boxed_slice();
+
+    let mut chall1 = GenericArray::default();
+    RO::<FAEST128fParameters>::hash_challenge_1(
+        chall1.as_mut_slice(),
+        mu.as_slice(),
+        &vole.com,
+        vole_cs.as_ref(),
+        iv.as_slice(),
+    );
+
+    let mut u_tilde = GenericArray::default();
+    <Faest128fBP as BaseParameters>::hash_u_vector(u_tilde.as_mut_slice(), &vole.u, &chall1);
+
+    let mut h2_hasher = RO::<FAEST128fParameters>::hash_challenge_2_init(chall1.as_slice(), u_tilde.as_slice());
+    <Faest128fBP as BaseParameters>::hash_v_matrix(&mut h2_hasher, vole.v.as_slice(), &chall1);
+
+    let mut d = vec![0u8; FAEST128F_VRF_WITNESS_COMPRESSED_LEN];
+    mask_vrf_witness_compressed(&mut d, vrf_witness_compressed.as_ref(), vole.u.as_slice());
+    let d = d.into_boxed_slice();
+
+    let mut chall2 = GenericArray::default();
+    RO::<FAEST128fParameters>::hash_challenge_2_finalize(h2_hasher, &mut chall2, d.as_ref());
+
+    Faest128fVrfProofMaterial {
+        mu,
+        r,
+        iv,
+        vole_r,
+        vole_iv,
+        vole_cs,
+        vole,
+        chall1,
+        u_tilde,
+        d,
+        chall2,
+        vrf_witness_compressed,
+    }
 }
 
 #[inline]

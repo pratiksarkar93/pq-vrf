@@ -25,6 +25,7 @@ const TWEAK_OFFSET: u32 = 1 << 31;
 
 /// Result of VOLE commitment
 #[derive(Clone, Debug, Default)]
+#[allow(private_interfaces)]
 pub struct VoleCommitResult<LambdaBytes, NLeafCommit, LHatBytes>
 where
     LambdaBytes: ArrayLength

@@ -1,7 +1,6 @@
 use aes::cipher::{BlockEncrypt, KeyInit};
 use faest::*;
 use generic_array::GenericArray;
-use generic_array::typenum::U16;
 use sha3::{Digest, Sha3_256};
 use rand::RngCore;
 use rand_chacha::ChaCha8Rng;
@@ -9,46 +8,6 @@ use rand_chacha::rand_core::SeedableRng;
 use signature::Signer;
 
 const MESSAGE: &str = "Hello, world!";
-
-/// Uncompressed VRF witness from [`faest128f_aes_extendedwitness_vrf`]: `2 * FAEST128F_EXTENDED_WITNESS_BYTES`.
-/// Each faest128f_aes_extendedwitness_vrf is 160 bytes = 16 bytes of key bytes + 40 bytes of extended key bytes + 104 bytes of input dependent trace.
-/// Compressed layout: one copy of the key-dependent prefix (`FAEST128F_WITNESS_KEY_PREFIX_BYTES`) plus
-/// the two plaintext-dependent tails (one per AES block: OWF then VRF). See `witness_vrf.rs` / `lib_vrf.rs`.
-/// Each compressed witness is 264 bytes = 56 bytes of key-dependent prefix + 104 bytes of OWF encryption trace + 104 bytes of VRF encryption trace.
-fn compress_faest128f_vrf_witness(full: &[u8]) -> Vec<u8> {
-    const L: usize = FAEST128F_EXTENDED_WITNESS_BYTES;
-    const P: usize = FAEST128F_WITNESS_KEY_PREFIX_BYTES;
-    debug_assert_eq!(
-        full.len(),
-        2 * L,
-        "expected full concatenated witness from faest128f_aes_extendedwitness_vrf"
-    );
-    // [0..P) and [L..L+P) are identical (key + key-schedule witness); keep one copy.
-    // First tail: OWF encryption trace; second tail: VRF encryption trace.
-    let mut out = Vec::with_capacity(P + 2 * (L - P));
-    out.extend_from_slice(&full[..P]);
-    out.extend_from_slice(&full[P..L]);
-    out.extend_from_slice(&full[L + P..2 * L]);
-    debug_assert_eq!(out.len(), 2 * L - P);
-    out
-}
-
-/// Inverse of [`compress_faest128f_vrf_witness`]: restores `2 * L` bytes (`witness_full`).
-///
-/// Layout of `compressed` (length `2*L - P`): `[prefix P][tail_owf L-P][tail_vrf L-P]`.
-fn decompress_faest128f_vrf_witness(compressed: &[u8]) -> Vec<u8> {
-    const L: usize = FAEST128F_EXTENDED_WITNESS_BYTES;
-    const P: usize = FAEST128F_WITNESS_KEY_PREFIX_BYTES;
-    debug_assert_eq!(compressed.len(), 2 * L - P);
-    let mut out = Vec::with_capacity(2 * L);
-    // First full witness = prefix ‖ tail_owf = compressed[0..L]
-    out.extend_from_slice(&compressed[..L]);
-    // Second = prefix ‖ tail_vrf
-    out.extend_from_slice(&compressed[..P]);
-    out.extend_from_slice(&compressed[L..]);
-    debug_assert_eq!(out.len(), 2 * L);
-    out
-}
 
 // VRF Quicksilver: implement `faest_signatures::zk_constraints_vrf` + `prover_vrf` (two AES
 // circuits, shared 56-byte prefix in `witness_compressed`). Standard `FAEST128fSigningKey::sign`
@@ -106,37 +65,23 @@ fn vrf_evaluate(keypair: &FAEST128fSigningKey, message: &[u8]) -> ([u8; 16], [u8
         GenericArray::from_mut_slice(&mut vrf_output).into(),
     );
     println!("vrf_output: {:?}", vrf_output);
-    let vrf_proof = vrf_evaluate_proof(&keypair, vrf_input, vrf_output);
+    let vrf_proof = vrf_evaluate_proof(keypair, vrf_input, vrf_output);
     return (vrf_output, vrf_proof);
 }
 
 fn vrf_evaluate_proof(
     keypair: &FAEST128fSigningKey,
     vrf_input: [u8; 16],
-    mut vrf_output: [u8; 16],
+    vrf_output: [u8; 16],
 ) -> [u8; 16] {
-    let sk_bytes = keypair.to_bytes();
-    let _owf_input = GenericArray::<u8, U16>::from_slice(&sk_bytes[..16]);
-    let owf_key = GenericArray::<u8, U16>::from_slice(&sk_bytes[16..32]);
-    // Full witness: 320 bytes = two OWF128 extended witnesses (160 each); see `witness_vrf` / `lib_vrf`.
-    let witness_full = faest128f_aes_extendedwitness_vrf(keypair, &vrf_input);
-    // Drop duplicate 56-byte key+key-schedule prefix from the second half → 264 bytes.
-    let witness_compressed = compress_faest128f_vrf_witness(&witness_full);
-    debug_assert_eq!(
-        witness_compressed.len(),
-        2 * FAEST128F_EXTENDED_WITNESS_BYTES - FAEST128F_WITNESS_KEY_PREFIX_BYTES
-    );
-    debug_assert_eq!(
-        decompress_faest128f_vrf_witness(&witness_compressed).as_slice(),
-        witness_full.as_ref()
-    );
+    // `FAEST128fSigningKey::proof_vrf` → `faest128f_proof_vrf` in `faest.rs`: μ, r, iv + dual-AES witness.
+    let rho = &[];
+    let prep = keypair.proof_vrf(&vrf_input, rho);
+    let witness_compressed = prep.vrf_witness_compressed;
+    debug_assert_eq!(witness_compressed.len(), FAEST128F_VRF_WITNESS_COMPRESSED_LEN);
     debug_assert!(vrf128f_split_witness_compressed(&witness_compressed).is_some());
 
-    let aes = aes::Aes128Enc::new(owf_key.into());
-    aes.encrypt_block_b2b(
-        GenericArray::<u8, U16>::from_slice(&vrf_input).into(),
-        GenericArray::from_mut_slice(&mut vrf_output).into(),
-    );
+
     vrf_output
 }
 
