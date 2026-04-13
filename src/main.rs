@@ -1,6 +1,6 @@
 mod vrf;
 
-use faest::{ByteEncoding, *};
+use faest::{KeypairGenerator, *};
 use sha3::{Digest, Sha3_256};
 use rand::RngCore;
 use rand_chacha::ChaCha8Rng;
@@ -15,9 +15,9 @@ const MESSAGE: &str = "Hello, world!";
 
 struct VRF {
     seed: u128,
-    evaluation_key: FAEST192sSigningKey,
-    /// First AES block of OWF192: `E_{owf_key}(owf_input)` (16 B). Not the FAEST public key; use
-    /// [`FAEST192sSigningKey::verifying_key`] for signatures.
+    /// Single-block OWF keypair (`owf_output = E_k(owf_input)`); not a stock [`FAEST192sSigningKey`].
+    evaluation_key: vrf::VrfFaest192sKeypair,
+    /// Same as [`vrf::VrfFaest192sKeypair::owf_output`] for the fixed `owf_input`.
     verification_key: [u8; 16],
 }
 
@@ -37,7 +37,7 @@ fn rng_from_seed(seed: u128) -> ChaCha8Rng {
 fn vrf_keygen() -> VRF {
     let seed = random_seed();
     let mut rng = rng_from_seed(seed);
-    let keypair = FAEST192sSigningKey::generate(&mut rng);
+    let keypair = vrf::vrf_keygen_with_rng(&mut rng);
     let sk = keypair.to_bytes();
     let verification_key: [u8; 16] = vrf::aes_evaluate_owf(&keypair, &sk[..16]);
     println!("keypair: {:?}", keypair);
@@ -51,7 +51,7 @@ fn vrf_keygen() -> VRF {
 
 fn vrf_keygen_with_seed(seed: u128) -> VRF {
     let mut rng = rng_from_seed(seed);
-    let keypair = FAEST192sSigningKey::generate(&mut rng);
+    let keypair = vrf::vrf_keygen_with_rng(&mut rng);
     let sk = keypair.to_bytes();
     let verification_key: [u8; 16] = vrf::aes_evaluate_owf(&keypair, &sk[..16]);
     println!("keypair: {:?}", keypair);
@@ -67,7 +67,7 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
 // yet — only FAEST-128f VRF types exist. Uncomment when 192s VRF is implemented.
 
 fn vrf_evaluate(
-    keypair: &FAEST192sSigningKey,
+    keypair: &vrf::VrfFaest192sKeypair,
     message: &[u8],
 ) -> ([u8; 16], [u8; 16]) {
     // Hash message to 16 bytes for AES block input
@@ -182,17 +182,12 @@ fn main() {
 
     assert_eq!(vrf1.verification_key, vrf2.verification_key, "Same seed => same keypair");
 
-    let signature: FAEST192sSignature = vrf1.evaluation_key.sign(MESSAGE.as_bytes());
-    let signature2: FAEST192sSignature = vrf2.evaluation_key.sign(MESSAGE.as_bytes());
-
-    assert!(vrf1
-        .evaluation_key
+    // Stock FAEST signing requires [`FAEST192sSigningKey`] with full OWF192; single-block keys above do not.
+    let mut sk_faest = rand::thread_rng();
+    let faest_sk = FAEST192sSigningKey::generate(&mut sk_faest);
+    let signature: FAEST192sSignature = faest_sk.sign(MESSAGE.as_bytes());
+    assert!(faest_sk
         .verifying_key()
         .verify(MESSAGE.as_bytes(), &signature)
-        .is_ok());
-    assert!(vrf2
-        .evaluation_key
-        .verifying_key()
-        .verify(MESSAGE.as_bytes(), &signature2)
         .is_ok());
 }

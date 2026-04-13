@@ -9,4 +9,5 @@ faest = { path = "faest-signatures" }
 sha3 = "0.10"
 generic-array = "0.14"
 rand = { version = "0.8", features = ["std_rng"] }
+rand_core = "0.6"
 rand_chacha = "0.3"
