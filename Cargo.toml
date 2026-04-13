@@ -7,7 +7,9 @@ edition = "2024"
 aes = "0.8"
 faest = { path = "faest-signatures" }
 sha3 = "0.10"
-generic-array = "0.14"
+# `aes` uses generic-array 0.14; `faest` uses 1.x — keep both with explicit names.
+generic-array = { package = "generic-array", version = "0.14" }
+generic-array-1 = { package = "generic-array", version = "1" }
 rand = { version = "0.8", features = ["std_rng"] }
 rand_core = "0.6"
 rand_chacha = "0.3"

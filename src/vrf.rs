@@ -1,10 +1,15 @@
 //! VRF-oriented key material: OWF public image is **one** AES-192 block
 //! `E_{owf_key}(owf_input)`, not FAEST’s full OWF192 (two AES evaluations).
+//!
+//! FAEST defines VRF helpers in `faest-signatures` (e.g. [`faest::aes_extendedwitness192_vrf`],
+//! [`faest::extend_witness_test_vrf`], `parameter_vrf`, `witness_vrf`, `zk_constraints_vrf`).
 
 use aes::cipher::{BlockEncrypt, KeyInit};
 use aes::Aes192Enc;
 use generic_array::GenericArray;
 use generic_array::typenum::{U16, U24};
+use faest::aes_extendedwitness192_vrf;
+use generic_array_1::{GenericArray as Ga1, typenum::U312};
 use rand_core::RngCore;
 
 /// FAEST-shaped **secret** bytes with a **single-block** OWF output (16 B), not `faest`’s 32-byte
@@ -73,4 +78,16 @@ pub fn aes_evaluate_owf(kp: &VrfFaest192sKeypair, input: &[u8]) -> [u8; 16] {
     let mut block = [0u8; 16];
     block.copy_from_slice(input);
     aes_single_block_owf192(&kp.owf_key, &block)
+}
+
+/// Extended witness for **two** AES-192 evaluations on the same key: `(owf_input, owf_key)` and
+/// `(vrf_input, owf_key)` — delegates to [`faest::aes_extendedwitness192_vrf`].
+pub fn vrf_evaluate_proof(
+    keypair: &VrfFaest192sKeypair,
+    vrf_input: [u8; 16],
+) -> Box<Ga1<u8, U312>> {
+    let owf_key = Ga1::from_slice(&keypair.owf_key);
+    let owf_input = Ga1::from_slice(&keypair.owf_input);
+    let vrf_in = Ga1::from_slice(&vrf_input);
+    aes_extendedwitness192_vrf(owf_key, owf_input, vrf_in)
 }

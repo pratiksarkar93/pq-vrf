@@ -56,6 +56,35 @@ where
     witness
 }
 
+/// Same layout as [`aes_extendedwitness`], but the two encryption traces use **`first_input`** and
+/// **`second_input`** under the same `owf_secret`, instead of `owf_input` and `owf_input` with
+/// `input[0] ^= 1` between rounds (see FAEST OWF with `Beta = 2`).
+///
+/// Supported for non-EM OWFs with **`Beta == 2`** (e.g. OWF192, OWF256). EM mode is not supported.
+pub(crate) fn aes_extendedwitness_two_plaintexts<O>(
+    owf_secret: &GenericArray<u8, O::LambdaBytes>,
+    first_input: &GenericArray<u8, O::InputSize>,
+    second_input: &GenericArray<u8, O::InputSize>,
+) -> Box<GenericArray<u8, O::LBytes>>
+where
+    O: OWFParameters,
+{
+    debug_assert!(!O::IS_EM);
+    debug_assert_eq!(O::Beta::USIZE, 2);
+
+    let mut witness = GenericArray::default_boxed();
+    let kb = rijndael_key_schedule::<O::NSt, O::NK, O::R>(owf_secret, O::SKe::USIZE);
+    let mut index = 0;
+
+    save_key_bits::<O>(&mut witness, owf_secret, &mut index);
+    save_non_lin_bits::<O>(&mut witness, &kb, &mut index);
+
+    round_with_save::<O>(first_input.as_slice(), &kb, &mut witness, &mut index);
+    round_with_save::<O>(second_input.as_slice(), &kb, &mut witness, &mut index);
+
+    witness
+}
+
 fn save_key_bits<O>(witness: &mut [u8], key: &[u8], index: &mut usize)
 where
     O: OWFParameters,

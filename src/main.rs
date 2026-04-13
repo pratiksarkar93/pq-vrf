@@ -12,6 +12,9 @@ const MESSAGE: &str = "Hello, world!";
 // VRF Quicksilver: implement `faest_signatures::zk_constraints_vrf` + `prover_vrf` (two AES
 // circuits, shared 56-byte prefix in `witness_compressed`). Standard `FAEST128fSigningKey::sign`
 // still uses stock `zk_constraints::aes_prove` (single OWF).
+//
+// OWF192 two-plaintext extended witness (same key, `owf_input` + second plaintext): see
+// `faest::aes_extendedwitness192_vrf` and `faest::extend_witness_test_vrf` in `faest-signatures`.
 
 struct VRF {
     seed: u128,
@@ -69,17 +72,16 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
 fn vrf_evaluate(
     keypair: &vrf::VrfFaest192sKeypair,
     message: &[u8],
-) -> ([u8; 16], [u8; 16]) {
+) -> ([u8; 16], Box<generic_array_1::GenericArray<u8, generic_array_1::typenum::U312>>) {
     // Hash message to 16 bytes for AES block input
     let vrf_input: [u8; 16] = Sha3_256::digest(message)[..16]
         .try_into()
         .unwrap();
 
-    let vrf_output : [u8; 16] = vrf::aes_evaluate_owf(&keypair, &vrf_input);
+    let vrf_output: [u8; 16] = vrf::aes_evaluate_owf(keypair, &vrf_input);
     println!("vrf_input: {:?}", vrf_input);
     println!("vrf_output: {:?}", vrf_output);
-    let vrf_proof = [0u8; 16];
-//    let vrf_proof = vrf_evaluate_proof(keypair, vrf_input, vrf_output);
+    let vrf_proof = vrf::vrf_evaluate_proof(keypair, vrf_input);
     (vrf_output, vrf_proof)
 }
 /*
@@ -112,24 +114,11 @@ fn print_vrf_proof_public(prep: &Faest192sVrfProofPublic) {
     );
     println!("--- end VRF public proof ---");
 }
+    */
 
-fn vrf_evaluate_proof(
-    keypair: &FAEST192sSigningKey,
-    vrf_input: [u8; 16],
-    vrf_output: [u8; 16],
-) -> Faest192sVrfProofPublic {
-    // `proof_vrf_public`: μ, iv, VOLE `com` + batch `cs`, challenges, `d` (no `u`/`v`/BAVC tree).
-    let rho = &[];
-    let prep = keypair.proof_vrf_public(&vrf_input, rho);
-    debug_assert_eq!(prep.vrf_output.as_slice(), vrf_output.as_slice());
-    let witness_compressed = &prep.vrf_witness_compressed;
-    debug_assert_eq!(witness_compressed.len(), FAEST192S_VRF_WITNESS_COMPRESSED_LEN);
-    debug_assert!(vrf192s_split_witness_compressed(witness_compressed).is_some());
 
-    print_vrf_proof_public(&prep);
-    prep
-}
 
+/*
 /// Recomputes `vrf_input` from `message` (same as [`vrf_evaluate`]) and checks μ + `chall1` on
 /// [`Faest192sVrfProofPublic`] (see [`FAEST192sVerificationKey::vrf_proof_verify`]).
 fn vrf_proof_verify(
@@ -164,7 +153,7 @@ fn main() {
     // let (vrf2_output1, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
     // let (vrf2_output2, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
 
-    // let (vrf3_output1, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
+    let (_vrf3_output1, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
     // let (vrf3_output2, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
 
     // assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");

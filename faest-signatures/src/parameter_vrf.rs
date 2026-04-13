@@ -1,6 +1,9 @@
 //! VRF extension trait layered on [`OWFParameters`]. Original `parameter.rs` / `OWFParameters` are unchanged.
 //!
 //! Use [`OWFParametersVrf`] when you need `extendwitness_vrf` / `witness_vrf` without forking core FAEST.
+//!
+//! For **OWF192** tests with an explicit second plaintext (two AES traces on the same key), use
+//! [`crate::extend_witness_test_vrf`] and [`crate::aes_extendedwitness192_vrf`] (see `witness_vrf.rs`).
 #![allow(private_bounds, private_interfaces)]
 
 #[path = "lib_vrf.rs"]
