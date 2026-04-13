@@ -1,7 +1,7 @@
 mod vrf;
 
-use faest::*;
-// use sha3::{Digest, Sha3_256};
+use faest::{ByteEncoding, *};
+use sha3::{Digest, Sha3_256};
 use rand::RngCore;
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
@@ -16,9 +16,9 @@ const MESSAGE: &str = "Hello, world!";
 struct VRF {
     seed: u128,
     evaluation_key: FAEST192sSigningKey,
-    /// Single-block OWF public material: `owf_input ‖ E_{owf_key}(owf_input)` (32 B). Not a FAEST
-    /// signature verification key; use [`FAEST192sSigningKey::verifying_key`] for that.
-    verification_key: [u8; 32],
+    /// First AES block of OWF192: `E_{owf_key}(owf_input)` (16 B). Not the FAEST public key; use
+    /// [`FAEST192sSigningKey::verifying_key`] for signatures.
+    verification_key: [u8; 16],
 }
 
 /// Returns a random 128-bit seed. Use [`rng_from_seed`] to regenerate the same randomness.
@@ -35,11 +35,13 @@ fn rng_from_seed(seed: u128) -> ChaCha8Rng {
 }
  
 fn vrf_keygen() -> VRF {
-    // Currently the vrf_key is generated on a random input owf_input in internal_keys.rs. Set it to be 0 string.
     let seed = random_seed();
     let mut rng = rng_from_seed(seed);
     let keypair = FAEST192sSigningKey::generate(&mut rng);
-    let verification_key = vrf::vrf_verification_key_single_block_owf(&keypair);
+    let sk = keypair.to_bytes();
+    let verification_key: [u8; 16] = vrf::aes_evaluate_owf(&keypair, &sk[..16]);
+    println!("keypair: {:?}", keypair);
+    println!("verification_key: {:?}", verification_key);
     VRF {
         seed,
         evaluation_key: keypair,
@@ -50,7 +52,10 @@ fn vrf_keygen() -> VRF {
 fn vrf_keygen_with_seed(seed: u128) -> VRF {
     let mut rng = rng_from_seed(seed);
     let keypair = FAEST192sSigningKey::generate(&mut rng);
-    let verification_key = vrf::vrf_verification_key_single_block_owf(&keypair);
+    let sk = keypair.to_bytes();
+    let verification_key: [u8; 16] = vrf::aes_evaluate_owf(&keypair, &sk[..16]);
+    println!("keypair: {:?}", keypair);
+    println!("verification_key: {:?}", verification_key);
     VRF {
         seed,
         evaluation_key: keypair,
@@ -60,30 +65,24 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
 
 // FAEST-192s VRF (`Faest192sVrfProofPublic`, `proof_vrf_public`, etc.) is not exposed in `faest`
 // yet — only FAEST-128f VRF types exist. Uncomment when 192s VRF is implemented.
-/*
+
 fn vrf_evaluate(
     keypair: &FAEST192sSigningKey,
     message: &[u8],
-) -> ([u8; 16], Faest192sVrfProofPublic) {
-    // `ByteEncoding` for FAEST-192s signing key: 32 bytes = owf_input ‖ owf_key (see `lib_vrf.rs` / `internal_keys`).
-    let sk_bytes = keypair.to_bytes();
-    let owf_key = GenericArray::from_slice(&sk_bytes[16..32]);
-
+) -> ([u8; 16], [u8; 16]) {
     // Hash message to 16 bytes for AES block input
     let vrf_input: [u8; 16] = Sha3_256::digest(message)[..16]
         .try_into()
         .unwrap();
 
-    let mut vrf_output = [0u8; 16];
-    let aes = aes::Aes192Enc::new(owf_key.into());
-    aes.encrypt_block_b2b(
-        GenericArray::from_slice(&vrf_input).into(),
-        GenericArray::from_mut_slice(&mut vrf_output).into(),
-    );
+    let vrf_output : [u8; 16] = vrf::aes_evaluate_owf(&keypair, &vrf_input);
+    println!("vrf_input: {:?}", vrf_input);
     println!("vrf_output: {:?}", vrf_output);
-    let vrf_proof = vrf_evaluate_proof(keypair, vrf_input, vrf_output);
+    let vrf_proof = [0u8; 16];
+//    let vrf_proof = vrf_evaluate_proof(keypair, vrf_input, vrf_output);
     (vrf_output, vrf_proof)
 }
+/*
 
 /// Prints [`Faest128fVrfProofPublic`] (VOLE `com` + `cs` + challenges; no full `u`/`v`/BAVC decommitment).
 fn print_vrf_proof_public(prep: &Faest192sVrfProofPublic) {
@@ -158,8 +157,9 @@ fn main() {
     assert_ne!(vrf1.evaluation_key.to_bytes(), vrf3.evaluation_key.to_bytes(), "Different seed => different keypair");
     assert_ne!(vrf1.verification_key, vrf3.verification_key, "Different seed => different keypair");
 
-    // let (vrf1_output1, vrf1_proof) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
-    // let (vrf1_output2, _) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let (vrf1_output1, _) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let (vrf1_output2, _) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");
     // vrf_proof_verify(&vrf1.verification_key, MESSAGE.as_bytes(), &vrf1_proof).expect("VRF public proof");
     // let (vrf2_output1, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
     // let (vrf2_output2, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());

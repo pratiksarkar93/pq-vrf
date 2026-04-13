@@ -15,15 +15,16 @@ use generic_array::GenericArray;
 /// For **FAEST signatures**, verification still requires the standard
 /// [`FAEST192sSigningKey::verifying_key`] (48 B: two-block OWF output). Use this type only when you
 /// intentionally want single-block public material (e.g. VRF-style exposure).
-pub fn vrf_verification_key_single_block_owf(sk: &FAEST192sSigningKey) -> [u8; 32] {
+pub fn aes_evaluate_owf(sk: &FAEST192sSigningKey, input: &[u8]) -> [u8; 16] {
+    debug_assert_eq!(input.len(), 16);
     let b = sk.to_bytes();
     // `SecretKey` encoding: `owf_input` ‖ `owf_key` (16 + 24 B for OWF192).
-    let mut out = [0u8; 32];
-    out[..16].copy_from_slice(&b[..16]);
-    let aes = Aes192Enc::new(GenericArray::from_slice(&b[16..40]));
+    let mut out = [0u8; 16];
+    let owf_key = GenericArray::from_slice(&b[16..40]);
+    let aes = Aes192Enc::new(owf_key);
     aes.encrypt_block_b2b(
-        GenericArray::from_slice(&b[..16]),
-        GenericArray::from_mut_slice(&mut out[16..]),
+        GenericArray::from_slice(input),
+        GenericArray::from_mut_slice(&mut out[..16]),
     );
     out
 }
