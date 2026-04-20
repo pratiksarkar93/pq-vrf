@@ -82,12 +82,27 @@ pub fn aes_evaluate_owf(kp: &VrfFaest192sKeypair, input: &[u8]) -> [u8; 16] {
 
 /// Extended witness for **two** AES-192 evaluations on the same key: `(owf_input, owf_key)` and
 /// `(vrf_input, owf_key)` — delegates to [`faest::aes_extendedwitness192_vrf`].
+///
+/// Also computes FAEST-192s **μ** via [`faest::faest192s_hash_mu`] with `owf_output ‖ vrf_output` as the
+/// 32-byte public image (matching stock OWF192 ciphertext length). Pass the same `msg` you will use
+/// for signing / verification.
 pub fn vrf_evaluate_proof(
     keypair: &VrfFaest192sKeypair,
     vrf_input: [u8; 16],
+    vrf_output: [u8; 16],
+    msg: &[u8],
 ) -> Box<Ga1<u8, U312>> {
     let owf_key = Ga1::from_slice(&keypair.owf_key);
     let owf_input = Ga1::from_slice(&keypair.owf_input);
     let vrf_in = Ga1::from_slice(&vrf_input);
-    aes_extendedwitness192_vrf(owf_key, owf_input, vrf_in)
+    let witness = aes_extendedwitness192_vrf(owf_key, owf_input, vrf_in);
+
+    let mut pk_image = [0u8; 32];
+    pk_image[..16].copy_from_slice(&keypair.owf_output);
+    pk_image[16..].copy_from_slice(&vrf_output);
+    let mut mu = [0u8; faest::FAEST192S_HASH_MU_OUTPUT_BYTES];
+    faest::faest192s_hash_mu(&mut mu, &keypair.owf_input, &pk_image, msg);
+    let _ = mu;
+
+    witness
 }

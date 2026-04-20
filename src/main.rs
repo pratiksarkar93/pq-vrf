@@ -81,7 +81,7 @@ fn vrf_evaluate(
     let vrf_output: [u8; 16] = vrf::aes_evaluate_owf(keypair, &vrf_input);
     println!("vrf_input: {:?}", vrf_input);
     println!("vrf_output: {:?}", vrf_output);
-    let vrf_proof = vrf::vrf_evaluate_proof(keypair, vrf_input);
+    let vrf_proof = vrf::vrf_evaluate_proof(keypair, vrf_input, vrf_output, message);
     (vrf_output, vrf_proof)
 }
 /*

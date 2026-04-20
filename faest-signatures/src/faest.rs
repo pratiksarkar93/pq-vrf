@@ -15,7 +15,10 @@ use crate::{
     bavc::{BatchVectorCommitment, BavcOpenResult},
     fields::Field,
     internal_keys::{PublicKey, SecretKey},
-    parameter::{BaseParameters, FAEST128fParameters, FAESTParameters, OWFParameters, TauParameters, Witness},
+    parameter::{
+        BaseParameters, FAEST128fParameters, FAEST192sParameters, FAESTParameters, OWFParameters,
+        TauParameters, Witness,
+    },
     prg::{IV, IVSize},
     random_oracles::{Hasher, RandomOracle},
     utils::{Reader, decode_all_chall_3, xor_arrays_into},
@@ -371,6 +374,21 @@ where
         h2_hasher.update(&ctr.to_le_bytes());
         h2_hasher.finish().read(chall3)
     }
+}
+
+/// Output length of **μ** from [`faest192s_hash_mu`] for FAEST-192s (`LambdaBytesTimes2`, i.e. 2·λ bytes).
+pub const FAEST192S_HASH_MU_OUTPUT_BYTES: usize =
+    <<<FAEST192sParameters as FAESTParameters>::OWF as OWFParameters>::LambdaBytesTimes2 as Unsigned>::USIZE;
+
+/// FAEST-192s signing step 3: **μ** ← H₂⁽⁰⁾(owf_input ‖ owf_output ‖ msg), same domain separation as
+/// stock [`faest_sign`] (SHAKE256 XOF in this crate).
+///
+/// `mu` must be exactly [`FAEST192S_HASH_MU_OUTPUT_BYTES`] long. For standard OWF192, `owf_input` is
+/// 16 bytes and `owf_output` is 32 bytes; other lengths are allowed by the hash, but must match
+/// whatever public-key / VRF encoding you use consistently with verification.
+pub fn faest192s_hash_mu(mu: &mut [u8], owf_input: &[u8], owf_output: &[u8], msg: &[u8]) {
+    debug_assert_eq!(mu.len(), FAEST192S_HASH_MU_OUTPUT_BYTES);
+    RO::<FAEST192sParameters>::hash_mu(mu, owf_input, owf_output, msg);
 }
 
 #[inline]

@@ -144,8 +144,8 @@ pub use parameter_vrf::{
 pub use witness_vrf::{aes_extendedwitness192_vrf, aes_extendedwitness_vrf, extend_witness_test_vrf};
 pub use zk_constraints_vrf::{vrf128f_split_witness_compressed, VRF128F_WITNESS_COMPRESSED_LEN};
 pub use faest::{
-    Faest128fVoleCom, Faest128fVoleCommitResult, Faest128fVrfProofMaterial, Faest128fVrfProofPublic,
-    FAEST128F_VRF_PROOF_PUBLIC_BYTES,
+    faest192s_hash_mu, Faest128fVoleCom, Faest128fVoleCommitResult, Faest128fVrfProofMaterial,
+    Faest128fVrfProofPublic, FAEST128F_VRF_PROOF_PUBLIC_BYTES, FAEST192S_HASH_MU_OUTPUT_BYTES,
 };
 
 #[cfg(all(
