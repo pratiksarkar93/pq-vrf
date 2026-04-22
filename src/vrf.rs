@@ -6,10 +6,10 @@
 
 use aes::cipher::{BlockEncrypt, KeyInit};
 use aes::Aes192Enc;
+use faest::{aes_extendedwitness192_vrf, FAEST192sSignature, Error as FaestError};
 use generic_array::GenericArray;
 use generic_array::typenum::{U16, U24};
-use faest::aes_extendedwitness192_vrf;
-use generic_array_1::{GenericArray as Ga1, typenum::U312};
+use generic_array_1::GenericArray as Ga1;
 use rand_core::RngCore;
 
 /// FAEST-shaped **secret** bytes with a **single-block** OWF output (16 B), not `faest`’s 32-byte
@@ -72,42 +72,12 @@ pub fn vrf_keygen_with_rng(mut rng: impl RngCore) -> VrfFaest192sKeypair {
     }
 }
 
-/// Transcript for the FAEST-192s VRF path through Quicksilver **`a{0,1,2}_tilde`** (after step 18 + the
-/// same `a1`/`a2` layout as `save_zk_constraints` in full signing).
-#[allow(dead_code)] // bundle for callers; not every field is used in the demo `main`
-#[derive(Debug)]
-pub struct VrfFaest192sProofMaterial {
-    pub witness: Box<Ga1<u8, U312>>,
-    /// `owf_output ‖ vrf_output` (32 B) fed into H_μ.
-    pub pk_image: [u8; 32],
-    /// `::3`
-    pub mu: [u8; faest::FAEST192S_HASH_MU_OUTPUT_BYTES],
-    /// `::4` (H₃ output).
-    pub r: [u8; faest::FAEST192S_HASH_R_OUTPUT_BYTES],
-    /// Final IV after H₄; same as the buffer passed to VOLE with `r`.
-    pub iv: [u8; faest::FAEST192S_IV_BYTES],
-    /// `::7` — VOLE batch `c` slots (analogous to `signature.cs`).
-    pub cs: [u8; faest::FAEST192S_VOLE_CS_BYTES],
-    pub vole: faest::Faest192sVoleCommitProof,
-    /// `::8`
-    pub chall1: [u8; faest::FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES],
-    /// `::10` — compressed `u` (same as `signature.u_tilde`).
-    pub u_tilde: [u8; faest::FAEST192S_U_TILDE_BYTES],
-    /// `::13` — masked witness `d = w ⊕ u` on the first `L` bytes.
-    pub d: [u8; faest::FAEST192S_L_BYTES],
-    /// `::14` — second challenge (H₂⁽²⁾ with `d` fed after step 11).
-    pub chall2: [u8; faest::FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES],
-    /// `::18` / `a0` — first Quicksilver field (fed into H₂⁽³⁾ init in full signing; not in `a1`/`a2` slots).
-    pub a0_tilde: [u8; faest::FAEST192S_LAMBDA_BYTES],
-    /// Same as `signature.a1_tilde` after `save_zk_constraints` in [`faest_sign`].
-    pub a1_tilde: [u8; faest::FAEST192S_LAMBDA_BYTES],
-    /// Same as `signature.a2_tilde` after `save_zk_constraints`.
-    pub a2_tilde: [u8; faest::FAEST192S_LAMBDA_BYTES],
-    /// `::19` — H₂⁽³⁾ hasher (chall2 + `a{0,1,2}_tilde`); for grinding / `chall3` in full signing.
-    pub h3_hasher: faest::Faest192sChallenge3Hasher,
-    /// `::20`–`::26` — grinded `chall3`, winning `ctr`, and BAVC `decom_i` (see [`faest::faest192s_grind_chall3`], matching stock FAEST-192s signing after step 19).
-    pub chall3_grind: faest::Faest192sChall3GrindResult,
-}
+/// A FAEST-192s VRF proof is a standard FAEST-192s **signature** (11 260 B), same byte layout as
+/// [`faest::faest192s_pack_signature`] and stock `FAEST192sSigningKey::sign`.
+///
+/// The verifier supplies **`vrf_input`** and **`vrf_output`** (and the 32 B public image
+/// `owf_output ‖ vrf_output` for **μ**); they are not carried in the signature bytes.
+pub type VrfFaest192sProof = FAEST192sSignature;
 
 /// AES-PRF evaluation under this keypair’s `owf_key` (same as one OWF AES block on `input`).
 pub fn aes_evaluate_owf(kp: &VrfFaest192sKeypair, input: &[u8]) -> [u8; 16] {
@@ -117,23 +87,21 @@ pub fn aes_evaluate_owf(kp: &VrfFaest192sKeypair, input: &[u8]) -> [u8; 16] {
     aes_single_block_owf192(&kp.owf_key, &block)
 }
 
-/// Extended witness for **two** AES-192 evaluations on the same key: `(owf_input, owf_key)` and
-/// `(vrf_input, owf_key)` — delegates to [`faest::aes_extendedwitness192_vrf`].
+/// Build the same transcript as internal [`faest::faest_sign`], with the VRF extended witness (two
+/// AES-192 evals) and a 32 B public image **`owf_output ‖ vrf_output`**. Returns a proof identical to
+/// a **FAEST-192s signature**; `vrf_input` / `vrf_output` are **not** included (the verifier has them
+/// when re-deriving μ and checking the VRF).
 ///
-/// Also computes FAEST-192s **μ** via [`faest::faest192s_hash_mu`], then the same **4–5, 7–8, 10–11,
-/// 13–14, 18** as [`faest_sign`]: r/iv, VOLE, [`faest::faest192s_hash_challenge_1`], `ũ`, H₂⁽²⁾+`v`,
-/// [`faest::faest192s_mask_witness_d`], [`faest::faest192s_hash_challenge_2_finalize`], and
-/// [`faest::faest192s_prove`] (see its doc for VRF vs stock witness).
-/// `owf_output ‖ vrf_output` is the 32-byte public image (stock OWF192 length). Use the same `msg` and
-/// `rho` as in a full signature when wiring VOLE. Steps **20–26** (grind `chall3` + BAVC `open`) are
-/// run via [`faest::faest192s_grind_chall3`], matching stock signing after H₂⁽³⁾ init.
+/// `r` / **IV (post-H₄)** for VOLE match stock signing: `iv_pre` from [`faest::faest192s_hash_r_iv`]
+/// is **copied** before [`faest::faest192s_hash_iv`], so the packed **`iv_pre`** field matches the
+/// serial signature. `vrf_output` is only used locally to form `pk_image` for `hash_mu`.
 pub fn vrf_evaluate_proof(
     keypair: &VrfFaest192sKeypair,
     vrf_input: [u8; 16],
     vrf_output: [u8; 16],
     msg: &[u8],
     rho: &[u8],
-) -> VrfFaest192sProofMaterial {
+) -> Result<VrfFaest192sProof, FaestError> {
     let owf_key = Ga1::from_slice(&keypair.owf_key);
     let owf_input = Ga1::from_slice(&keypair.owf_input);
     let vrf_in = Ga1::from_slice(&vrf_input);
@@ -142,40 +110,38 @@ pub fn vrf_evaluate_proof(
     let mut pk_image = [0u8; 32];
     pk_image[..16].copy_from_slice(&keypair.owf_output);
     pk_image[16..].copy_from_slice(&vrf_output);
-    
+
     // ::3
     let mut mu = [0u8; faest::FAEST192S_HASH_MU_OUTPUT_BYTES];
     faest::faest192s_hash_mu(&mut mu, &keypair.owf_input, &pk_image, msg);
 
-    // ::4–5 (match `faest_sign`: H₃ then H₄)
+    // ::4: keep pre-H₄ IV for the serial signature; ::5: post-H₄ IV for VOLE (cf. `faest_sign`)
     let mut r = [0u8; faest::FAEST192S_HASH_R_OUTPUT_BYTES];
-    let mut iv_pre = [0u8; faest::FAEST192S_IV_BYTES];
-    faest::faest192s_hash_r_iv(&mut r, &mut iv_pre, &keypair.owf_key, &mu, rho);
-    let iv = faest::faest192s_hash_iv(&mut iv_pre);
+    let mut iv_pre_for_sig = [0u8; faest::FAEST192S_IV_BYTES];
+    faest::faest192s_hash_r_iv(&mut r, &mut iv_pre_for_sig, &keypair.owf_key, &mu, rho);
+    let mut iv_post = iv_pre_for_sig;
+    let iv = faest::faest192s_hash_iv(&mut iv_post);
 
-    // ::7 (same as `faest_sign`: VOLE + BAVC; `cs` is the `signature.cs` buffer)
+    // ::7
     let mut cs = [0u8; faest::FAEST192S_VOLE_CS_BYTES];
-    let vole = faest::faest192s_volecommit(&mut cs, &r, &iv_pre);
+    let vole = faest::faest192s_volecommit(&mut cs, &r, &iv_post);
 
     // ::8
     let mut chall1 = [0u8; faest::FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES];
     faest::faest192s_hash_challenge_1(&mut chall1, &mu, vole.com(), &cs, iv.as_slice());
 
-    let mut iv_bytes = [0u8; faest::FAEST192S_IV_BYTES];
-    iv_bytes.copy_from_slice(iv.as_slice());
-
-    // ::10 (same as `faest_sign`: hash `u` into `u_tilde`)
+    // ::10
     let mut u_tilde = [0u8; faest::FAEST192S_U_TILDE_BYTES];
     faest::faest192s_hash_u_vector(&mut u_tilde, &vole, &chall1);
 
-    // ::11: H₂⁽²⁾ init, hash `v` row-wise
+    // ::11
     let h2_hasher = faest::faest192s_hash_challenge_2_v_matrix(&chall1, &u_tilde, &vole);
 
-    // ::13 (same as `faest_sign`: d ← witness ⊕ u on L bytes)
+    // ::13
     let mut d = [0u8; faest::FAEST192S_L_BYTES];
     faest::faest192s_mask_witness_d(&mut d, witness.as_slice(), &vole);
 
-    // ::14: chall2 from H₂⁽²⁾ with `d`
+    // ::14
     let mut chall2 = [0u8; faest::FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES];
     faest::faest192s_hash_challenge_2_finalize(
         h2_hasher,
@@ -183,7 +149,7 @@ pub fn vrf_evaluate_proof(
         &mut chall2,
     );
 
-    // ::18 (Quicksilver prove — same as `faest_sign`; `pk` is `owf_input ‖` full 32-byte `owf_output`)
+    // ::18
     let qs = faest::faest192s_prove(
         witness.as_ref(),
         &vole,
@@ -191,12 +157,11 @@ pub fn vrf_evaluate_proof(
         &pk_image,
         &chall2,
     );
-    // Same as `save_zk_constraints` in `faest_sign` (a1, a2 written to the signature; a0 only for chall3)
     let a0_tilde = qs.a0_tilde;
     let a1_tilde = qs.a1_tilde;
     let a2_tilde = qs.a2_tilde;
 
-    // ::19 (H₂⁽³⁾ init — same as `faest_sign` before the chall3 / grinding loop)
+    // ::19–::26
     let h3_hasher = faest::faest192s_hash_challenge_3_init(
         &chall2,
         &a0_tilde,
@@ -205,22 +170,16 @@ pub fn vrf_evaluate_proof(
     );
     let chall3_grind = faest::faest192s_grind_chall3(&h3_hasher, &vole);
 
-    VrfFaest192sProofMaterial {
-        witness,
-        pk_image,
-        mu,
-        r,
-        iv: iv_bytes,
-        cs,
-        vole,
-        chall1,
-        u_tilde,
-        d,
-        chall2,
-        a0_tilde,
-        a1_tilde,
-        a2_tilde,
-        h3_hasher,
-        chall3_grind,
-    }
+    let raw = faest::faest192s_pack_signature(
+        &cs,
+        &u_tilde,
+        &d,
+        &a1_tilde,
+        &a2_tilde,
+        &chall3_grind.decom_i,
+        &chall3_grind.chall3,
+        &iv_pre_for_sig,
+        chall3_grind.grind_ctr,
+    );
+    FAEST192sSignature::try_from(raw.as_slice())
 }

@@ -72,7 +72,7 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
 fn vrf_evaluate(
     keypair: &vrf::VrfFaest192sKeypair,
     message: &[u8],
-) -> ([u8; 16], vrf::VrfFaest192sProofMaterial) {
+) -> ([u8; 16], vrf::VrfFaest192sProof) {
     // Hash message to 16 bytes for AES block input
     let vrf_input: [u8; 16] = Sha3_256::digest(message)[..16]
         .try_into()
@@ -81,7 +81,8 @@ fn vrf_evaluate(
     let vrf_output: [u8; 16] = vrf::aes_evaluate_owf(keypair, &vrf_input);
     println!("vrf_input: {:?}", vrf_input);
     println!("vrf_output: {:?}", vrf_output);
-    let vrf_proof = vrf::vrf_evaluate_proof(keypair, vrf_input, vrf_output, message, &[]);
+    let vrf_proof = vrf::vrf_evaluate_proof(keypair, vrf_input, vrf_output, message, &[])
+        .expect("vrf signature packing");
     (vrf_output, vrf_proof)
 }
 /*

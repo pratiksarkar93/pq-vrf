@@ -646,6 +646,16 @@ pub const FAEST192S_DECOM_I_BYTES: usize = <Faest192sOwf as OWFParameters>::NLea
     + <Faest192sTau as TauParameters>::Topen::USIZE
         * <Faest192sOwf as OWFParameters>::LambdaBytes::USIZE;
 
+/// Byte length of a serialized FAEST-192s signature (sum of the same regions as `SignatureRefMut` / [`faest_sign`]).
+pub const FAEST192S_SIGNATURE_BYTES: usize = FAEST192S_VOLE_CS_BYTES
+    + FAEST192S_U_TILDE_BYTES
+    + FAEST192S_L_BYTES
+    + 2 * FAEST192S_LAMBDA_BYTES
+    + FAEST192S_DECOM_I_BYTES
+    + FAEST192S_CHALL3_BYTES
+    + FAEST192S_IV_BYTES
+    + 4;
+
 /// Third challenge and BAVC open data after the grinding loop in [`faest_sign`] (steps 20–26).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Faest192sChall3GrindResult {
@@ -692,6 +702,42 @@ pub fn faest192s_grind_chall3(
         }
     }
     unreachable!();
+}
+
+/// Assemble a FAEST-192s **signature** byte string in the same order as [`SignatureRefMut`] / internal
+/// [`faest_sign`]: `cs` ‖ `ũ` ‖ `d` ‖ `a1` ‖ `a2` ‖ `decom_i` ‖ `chall3` ‖ `iv_pre` ‖ `ctr` (4 B LE).
+///
+/// `iv_pre` must be the **pre-H₄** IV (the buffer output of [`faest192s_hash_r_iv`], **before**
+/// in-place H₄; stock signing does not place H₄’s output in this final slot).
+pub fn faest192s_pack_signature(
+    cs: &[u8; FAEST192S_VOLE_CS_BYTES],
+    u_tilde: &[u8; FAEST192S_U_TILDE_BYTES],
+    d: &[u8; FAEST192S_L_BYTES],
+    a1_tilde: &[u8; FAEST192S_LAMBDA_BYTES],
+    a2_tilde: &[u8; FAEST192S_LAMBDA_BYTES],
+    decom_i: &[u8; FAEST192S_DECOM_I_BYTES],
+    chall3: &[u8; FAEST192S_CHALL3_BYTES],
+    iv_pre: &[u8; FAEST192S_IV_BYTES],
+    grind_ctr: u32,
+) -> [u8; FAEST192S_SIGNATURE_BYTES] {
+    let mut out = [0u8; FAEST192S_SIGNATURE_BYTES];
+    let mut p = 0usize;
+    let place = |buf: &mut [u8], p: &mut usize, b: &[u8]| {
+        let e = *p + b.len();
+        buf[*p..e].copy_from_slice(b);
+        *p = e;
+    };
+    place(&mut out, &mut p, cs.as_slice());
+    place(&mut out, &mut p, u_tilde.as_slice());
+    place(&mut out, &mut p, d.as_slice());
+    place(&mut out, &mut p, a1_tilde.as_slice());
+    place(&mut out, &mut p, a2_tilde.as_slice());
+    place(&mut out, &mut p, decom_i.as_slice());
+    place(&mut out, &mut p, chall3.as_slice());
+    place(&mut out, &mut p, iv_pre.as_slice());
+    place(&mut out, &mut p, &grind_ctr.to_le_bytes());
+    debug_assert_eq!(p, FAEST192S_SIGNATURE_BYTES);
+    out
 }
 
 /// FAEST-192s signing step 7: [`volecommit`] (VOLE + BAVC), same as
