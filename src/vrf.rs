@@ -72,8 +72,8 @@ pub fn vrf_keygen_with_rng(mut rng: impl RngCore) -> VrfFaest192sKeypair {
     }
 }
 
-/// Transcript for the FAEST-192s VRF path through **chall2** (after steps 13–14): same *logical* pieces
-/// as a [`faest::SignatureRefMut`] through masked witness `d` and H₂⁽²⁾, but as owned buffers.
+/// Transcript for the FAEST-192s VRF path through Quicksilver **`a{0,1,2}_tilde`** (after step 18 + the
+/// same `a1`/`a2` layout as `save_zk_constraints` in full signing).
 #[allow(dead_code)] // bundle for callers; not every field is used in the demo `main`
 #[derive(Debug)]
 pub struct VrfFaest192sProofMaterial {
@@ -97,6 +97,16 @@ pub struct VrfFaest192sProofMaterial {
     pub d: [u8; faest::FAEST192S_L_BYTES],
     /// `::14` — second challenge (H₂⁽²⁾ with `d` fed after step 11).
     pub chall2: [u8; faest::FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES],
+    /// `::18` / `a0` — first Quicksilver field (fed into H₂⁽³⁾ init in full signing; not in `a1`/`a2` slots).
+    pub a0_tilde: [u8; faest::FAEST192S_LAMBDA_BYTES],
+    /// Same as `signature.a1_tilde` after `save_zk_constraints` in [`faest_sign`].
+    pub a1_tilde: [u8; faest::FAEST192S_LAMBDA_BYTES],
+    /// Same as `signature.a2_tilde` after `save_zk_constraints`.
+    pub a2_tilde: [u8; faest::FAEST192S_LAMBDA_BYTES],
+    /// `::19` — H₂⁽³⁾ hasher (chall2 + `a{0,1,2}_tilde`); for grinding / `chall3` in full signing.
+    pub h3_hasher: faest::Faest192sChallenge3Hasher,
+    /// `::20`–`::26` — grinded `chall3`, winning `ctr`, and BAVC `decom_i` (see [`faest::faest192s_grind_chall3`], matching stock FAEST-192s signing after step 19).
+    pub chall3_grind: faest::Faest192sChall3GrindResult,
 }
 
 /// AES-PRF evaluation under this keypair’s `owf_key` (same as one OWF AES block on `input`).
@@ -111,10 +121,12 @@ pub fn aes_evaluate_owf(kp: &VrfFaest192sKeypair, input: &[u8]) -> [u8; 16] {
 /// `(vrf_input, owf_key)` — delegates to [`faest::aes_extendedwitness192_vrf`].
 ///
 /// Also computes FAEST-192s **μ** via [`faest::faest192s_hash_mu`], then the same **4–5, 7–8, 10–11,
-/// 13–14** as [`faest_sign`]: r/iv, VOLE, [`faest::faest192s_hash_challenge_1`], `ũ`, H₂⁽²⁾+`v`,
-/// [`faest::faest192s_mask_witness_d`], and [`faest::faest192s_hash_challenge_2_finalize`].
+/// 13–14, 18** as [`faest_sign`]: r/iv, VOLE, [`faest::faest192s_hash_challenge_1`], `ũ`, H₂⁽²⁾+`v`,
+/// [`faest::faest192s_mask_witness_d`], [`faest::faest192s_hash_challenge_2_finalize`], and
+/// [`faest::faest192s_prove`] (see its doc for VRF vs stock witness).
 /// `owf_output ‖ vrf_output` is the 32-byte public image (stock OWF192 length). Use the same `msg` and
-/// `rho` as in a full signature when wiring VOLE.
+/// `rho` as in a full signature when wiring VOLE. Steps **20–26** (grind `chall3` + BAVC `open`) are
+/// run via [`faest::faest192s_grind_chall3`], matching stock signing after H₂⁽³⁾ init.
 pub fn vrf_evaluate_proof(
     keypair: &VrfFaest192sKeypair,
     vrf_input: [u8; 16],
@@ -171,6 +183,28 @@ pub fn vrf_evaluate_proof(
         &mut chall2,
     );
 
+    // ::18 (Quicksilver prove — same as `faest_sign`; `pk` is `owf_input ‖` full 32-byte `owf_output`)
+    let qs = faest::faest192s_prove(
+        witness.as_ref(),
+        &vole,
+        &keypair.owf_input,
+        &pk_image,
+        &chall2,
+    );
+    // Same as `save_zk_constraints` in `faest_sign` (a1, a2 written to the signature; a0 only for chall3)
+    let a0_tilde = qs.a0_tilde;
+    let a1_tilde = qs.a1_tilde;
+    let a2_tilde = qs.a2_tilde;
+
+    // ::19 (H₂⁽³⁾ init — same as `faest_sign` before the chall3 / grinding loop)
+    let h3_hasher = faest::faest192s_hash_challenge_3_init(
+        &chall2,
+        &a0_tilde,
+        &a1_tilde,
+        &a2_tilde,
+    );
+    let chall3_grind = faest::faest192s_grind_chall3(&h3_hasher, &vole);
+
     VrfFaest192sProofMaterial {
         witness,
         pk_image,
@@ -183,5 +217,10 @@ pub fn vrf_evaluate_proof(
         u_tilde,
         d,
         chall2,
+        a0_tilde,
+        a1_tilde,
+        a2_tilde,
+        h3_hasher,
+        chall3_grind,
     }
 }

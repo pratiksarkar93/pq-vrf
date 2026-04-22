@@ -144,14 +144,19 @@ pub use parameter_vrf::{
 pub use witness_vrf::{aes_extendedwitness192_vrf, aes_extendedwitness_vrf, extend_witness_test_vrf};
 pub use zk_constraints_vrf::{vrf128f_split_witness_compressed, VRF128F_WITNESS_COMPRESSED_LEN};
 pub use faest::{
-    faest192s_hash_challenge_1, faest192s_hash_challenge_2_finalize,
-    faest192s_hash_challenge_2_v_matrix, faest192s_hash_iv, faest192s_hash_mu, faest192s_hash_r_iv,
-    faest192s_hash_u_vector, faest192s_mask_witness_d, faest192s_volecommit,
-    Faest128fVoleCom, Faest128fVoleCommitResult, Faest128fVrfProofMaterial, Faest128fVrfProofPublic,
-    Faest192sChallenge2Hasher, Faest192sVoleCommitProof, FAEST128F_VRF_PROOF_PUBLIC_BYTES,
-    FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES, FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES,
-    FAEST192S_HASH_MU_OUTPUT_BYTES, FAEST192S_HASH_R_OUTPUT_BYTES, FAEST192S_IV_BYTES,
-    FAEST192S_L_BYTES, FAEST192S_U_TILDE_BYTES, FAEST192S_VOLE_CS_BYTES,
+    faest192s_grind_chall3, faest192s_hash_challenge_1, faest192s_hash_challenge_2_finalize,
+    faest192s_hash_challenge_2_v_matrix, faest192s_hash_challenge_3_finalize,
+    faest192s_hash_challenge_3_init, faest192s_hash_iv,
+    faest192s_hash_mu, faest192s_hash_r_iv, faest192s_hash_u_vector, faest192s_mask_witness_d,
+    faest192s_prove, faest192s_volecommit, Faest128fVoleCom, Faest128fVoleCommitResult,
+    Faest128fVrfProofMaterial, Faest128fVrfProofPublic, Faest192sChall3GrindResult,
+    Faest192sChallenge2Hasher,
+    Faest192sChallenge3Hasher, Faest192sQuicksilverRound1, Faest192sVoleCommitProof,
+    FAEST128F_VRF_PROOF_PUBLIC_BYTES, FAEST192S_DECOM_I_BYTES, FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES,
+    FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES, FAEST192S_HASH_MU_OUTPUT_BYTES,
+    FAEST192S_CHALL3_BYTES, FAEST192S_HASH_R_OUTPUT_BYTES, FAEST192S_IV_BYTES,
+    FAEST192S_LAMBDA_BYTES, FAEST192S_L_BYTES,
+    FAEST192S_U_TILDE_BYTES, FAEST192S_VOLE_CS_BYTES,
 };
 
 #[cfg(all(

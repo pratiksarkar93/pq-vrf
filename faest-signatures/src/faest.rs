@@ -5,7 +5,7 @@ use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 
 use generic_array::{
     GenericArray,
-    typenum::{Prod, U2, U16, U32, Unsigned},
+    typenum::{Prod, U2, U16, U32, U312, Unsigned},
 };
 use rand_core::CryptoRngCore;
 use sha3::{Digest, Sha3_256};
@@ -37,6 +37,7 @@ type RO<P> =
 
 type Faest192sOwf = <FAEST192sParameters as FAESTParameters>::OWF;
 type Faest192sBavc = <FAEST192sParameters as FAESTParameters>::BAVC;
+type Faest192sTau = <FAEST192sParameters as FAESTParameters>::Tau;
 type Faest192sLHat = <Faest192sOwf as OWFParameters>::LHatBytes;
 type Faest192sBP = <Faest192sOwf as OWFParameters>::BaseParams;
 
@@ -52,6 +53,9 @@ pub const FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES: usize =
 /// Byte length of the extended / masked Quicksilver witness (FAEST-192s **`L`**, `signature.d`).
 pub const FAEST192S_L_BYTES: usize = <Faest192sOwf as OWFParameters>::LBytes::USIZE;
 
+/// One field element in bytes for the FAEST-192s OWF / Quicksilver layer (λ in bytes, `a{0,1,2}_tilde`).
+pub const FAEST192S_LAMBDA_BYTES: usize = <Faest192sOwf as OWFParameters>::LambdaBytes::USIZE;
+
 type Faest192sH2Hasher = <RO<FAEST192sParameters> as RandomOracle>::Hasher<10>;
 
 /// State after [`faest_sign`] step 11: H₂⁽²⁾ with `chall1` and `ũ`, then VOLE `v` row hashes absorbed
@@ -61,6 +65,17 @@ pub struct Faest192sChallenge2Hasher(pub(crate) Faest192sH2Hasher);
 impl core::fmt::Debug for Faest192sChallenge2Hasher {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Faest192sChallenge2Hasher(..)")
+    }
+}
+
+type Faest192sH3Hasher = <RO<FAEST192sParameters> as RandomOracle>::Hasher<11>;
+
+/// H₂⁽³⁾ state after `chall2` and Quicksilver `a{0,1,2}_tilde` (before the chall3 / grinding loop).
+pub struct Faest192sChallenge3Hasher(pub(crate) Faest192sH3Hasher);
+
+impl core::fmt::Debug for Faest192sChallenge3Hasher {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Faest192sChallenge3Hasher(..)")
     }
 }
 
@@ -542,6 +557,141 @@ pub fn faest192s_mask_witness_d(
     let l = <Faest192sOwf as OWFParameters>::LBytes::USIZE;
     let u_prefix = &u[..l];
     xor_arrays_into(&mut d[..], witness, u_prefix);
+}
+
+/// Quicksilver **prove** output (FAEST-192s signing `::18`, same as [`faest_sign`] before chall3 / grinding).
+#[derive(Clone, Debug)]
+pub struct Faest192sQuicksilverRound1 {
+    /// First prover field element in bytes (fed into H₂⁽³⁾ in stock signing).
+    pub a0_tilde: [u8; FAEST192S_LAMBDA_BYTES],
+    /// Second prover value (also written to `signature.a1_tilde` in a full signature).
+    pub a1_tilde: [u8; FAEST192S_LAMBDA_BYTES],
+    /// Third prover value (also written to `signature.a2_tilde`).
+    pub a2_tilde: [u8; FAEST192S_LAMBDA_BYTES],
+}
+
+/// FAEST-192s signing step 18: [`OWFParameters::prove`] (same as [`faest_sign`]: `a0_tilde`, `a1_tilde`, `a2_tilde` from `chall2`, VOLE `u` / `v`, and `pk = (owf_input, owf_output)`).
+///
+/// The stock prover enforces the **standard** OWF192 circuit (second AES block in `owf_output` uses
+/// plaintext with `owf_input[0] ⊕ 1`). A witness from [`crate::witness_vrf::aes_extendedwitness192_vrf`]
+/// is **not** the same wire relation; a sound VRF over that witness needs a VRF Quicksilver path (see
+/// e.g. [`crate::zk_constraints_vrf::aes_prove_vrf_128f`]) for 128f, not this helper.
+pub fn faest192s_prove(
+    witness: &GenericArray<u8, U312>,
+    vole: &Faest192sVoleCommitProof,
+    owf_input: &[u8; 16],
+    owf_output_pk: &[u8; 32],
+    chall2: &[u8; FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES],
+) -> Faest192sQuicksilverRound1 {
+    type O = Faest192sOwf;
+    let u = vole.0.u.as_ref().as_slice();
+    let l = <O as OWFParameters>::LBytes::USIZE;
+    let l2 = <O as OWFParameters>::LambdaBytesTimes2::USIZE;
+    let u_tail = GenericArray::<u8, <O as OWFParameters>::LambdaBytesTimes2>::from_slice(
+        u[l..l + l2].as_ref(),
+    );
+    let pk = PublicKey {
+        owf_input: GenericArray::from_slice(owf_input as &[u8]).clone(),
+        owf_output: GenericArray::from_slice(owf_output_pk as &[u8]).clone(),
+    };
+    let chall2_ga = GenericArray::<u8, <Faest192sBP as BaseParameters>::Chall>::from_slice(chall2);
+    let (a0, a1, a2) = <O as OWFParameters>::prove(witness, u_tail, vole.0.v.as_ref(), &pk, chall2_ga);
+    let mut a0_tilde = [0u8; FAEST192S_LAMBDA_BYTES];
+    let mut a1_tilde = [0u8; FAEST192S_LAMBDA_BYTES];
+    let mut a2_tilde = [0u8; FAEST192S_LAMBDA_BYTES];
+    a0_tilde.copy_from_slice(a0.as_bytes().as_slice());
+    a1_tilde.copy_from_slice(a1.as_bytes().as_slice());
+    a2_tilde.copy_from_slice(a2.as_bytes().as_slice());
+    Faest192sQuicksilverRound1 {
+        a0_tilde,
+        a1_tilde,
+        a2_tilde,
+    }
+}
+
+/// FAEST-192s signing step 19: H₂⁽³⁾ init on **`chall2` ‖ `a0_tilde` ‖ `a1_tilde` ‖ `a2_tilde`** (same as
+/// [`faest_sign`] before `hash_challenge_3_finalize` + grinding).
+pub fn faest192s_hash_challenge_3_init(
+    chall2: &[u8; FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES],
+    a0_tilde: &[u8; FAEST192S_LAMBDA_BYTES],
+    a1_tilde: &[u8; FAEST192S_LAMBDA_BYTES],
+    a2_tilde: &[u8; FAEST192S_LAMBDA_BYTES],
+) -> Faest192sChallenge3Hasher {
+    let h = RO::<FAEST192sParameters>::hash_challenge_3_init(
+        chall2.as_ref(),
+        a0_tilde.as_ref(),
+        a1_tilde.as_ref(),
+        a2_tilde.as_ref(),
+    );
+    Faest192sChallenge3Hasher(h)
+}
+
+/// One candidate third-challenge value **`chall3`** (λ bytes; same as `signature.chall3` in [`faest_sign`]).
+pub const FAEST192S_CHALL3_BYTES: usize = <Faest192sOwf as OWFParameters>::LambdaBytes::USIZE;
+
+/// One grinding step: append `ctr` to the step-19 H₂⁽³⁾ hasher and read **`chall3`**
+/// (same as [`faest_sign`]; repeat with increasing `ctr` until `check_challenge_3` / BAVC open succeeds).
+pub fn faest192s_hash_challenge_3_finalize(
+    hasher: &Faest192sChallenge3Hasher,
+    chall3: &mut [u8; FAEST192S_CHALL3_BYTES],
+    ctr: u32,
+) {
+    RO::<FAEST192sParameters>::hash_challenge_3_finalize(&hasher.0, chall3, ctr);
+}
+
+/// Byte length of the **`decom_i`** sub-buffer in a stock FAEST-192s signature (BAVC open, step 26).
+pub const FAEST192S_DECOM_I_BYTES: usize = <Faest192sOwf as OWFParameters>::NLeafCommit::USIZE
+    * <Faest192sOwf as OWFParameters>::LambdaBytes::USIZE
+    * <Faest192sTau as TauParameters>::Tau::USIZE
+    + <Faest192sTau as TauParameters>::Topen::USIZE
+        * <Faest192sOwf as OWFParameters>::LambdaBytes::USIZE;
+
+/// Third challenge and BAVC open data after the grinding loop in [`faest_sign`] (steps 20–26).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Faest192sChall3GrindResult {
+    /// Final third Fiat–Shamir challenge (λ bytes).
+    pub chall3: [u8; FAEST192S_CHALL3_BYTES],
+    /// Counter passed to `hash_challenge_3_finalize` for this `chall3`.
+    pub grind_ctr: u32,
+    /// BAVC decommitment written to `signature.decom_i` in stock signing.
+    pub decom_i: [u8; FAEST192S_DECOM_I_BYTES],
+}
+
+/// FAEST-192s signing steps 20–26: grind `chall3` with increasing `ctr` until `w_grind` holds and
+/// BAVC `open` succeeds (same loop as in internal `faest_sign` after
+/// [`faest192s_hash_challenge_3_init`]).
+///
+/// This function only returns once a valid opening is found (identical to stock signing: the inner
+/// loop is unbounded).
+pub fn faest192s_grind_chall3(
+    h3: &Faest192sChallenge3Hasher,
+    vole: &Faest192sVoleCommitProof,
+) -> Faest192sChall3GrindResult {
+    let decom = &vole.0.decom;
+    for ctr in 0u32.. {
+        let mut chall3 = [0u8; FAEST192S_CHALL3_BYTES];
+        RO::<FAEST192sParameters>::hash_challenge_3_finalize(&h3.0, &mut chall3, ctr);
+        if !check_challenge_3::<FAEST192sParameters, Faest192sOwf>(&chall3) {
+            continue;
+        }
+        let i_delta = decode_all_chall_3::<Faest192sTau>(chall3.as_slice());
+        if let Some(ref opened) = Faest192sBavc::open(decom, &i_delta) {
+            let mut decom_i = [0u8; FAEST192S_DECOM_I_BYTES];
+            let BavcOpenResult { coms, nodes } = opened;
+            let mut offset = 0;
+            for slice in coms.iter().chain(nodes) {
+                decom_i[offset..offset + slice.len()].copy_from_slice(slice);
+                offset += slice.len();
+            }
+            decom_i[offset..].fill(0);
+            return Faest192sChall3GrindResult {
+                chall3,
+                grind_ctr: ctr,
+                decom_i,
+            };
+        }
+    }
+    unreachable!();
 }
 
 /// FAEST-192s signing step 7: [`volecommit`] (VOLE + BAVC), same as
