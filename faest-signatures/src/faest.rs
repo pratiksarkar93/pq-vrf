@@ -35,6 +35,35 @@ use crate::{
 type RO<P> =
     <<<P as FAESTParameters>::OWF as OWFParameters>::BaseParams as BaseParameters>::RandomOracle;
 
+type Faest192sOwf = <FAEST192sParameters as FAESTParameters>::OWF;
+type Faest192sBavc = <FAEST192sParameters as FAESTParameters>::BAVC;
+type Faest192sLHat = <Faest192sOwf as OWFParameters>::LHatBytes;
+type Faest192sBP = <Faest192sOwf as OWFParameters>::BaseParams;
+
+/// Byte length of compressed **`ũ`** = [`BaseParameters::hash_u_vector`] output for FAEST-192s
+/// (same as `signature.u_tilde` in [`faest_sign`] step 10).
+pub const FAEST192S_U_TILDE_BYTES: usize =
+    <Faest192sBP as BaseParameters>::VoleHasherOutputLength::USIZE;
+
+/// Byte length of the second-challenge value **`chall2`** (FAEST-192s H₂⁽²⁾ output).
+pub const FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES: usize =
+    <Faest192sBP as BaseParameters>::Chall::USIZE;
+
+/// Byte length of the extended / masked Quicksilver witness (FAEST-192s **`L`**, `signature.d`).
+pub const FAEST192S_L_BYTES: usize = <Faest192sOwf as OWFParameters>::LBytes::USIZE;
+
+type Faest192sH2Hasher = <RO<FAEST192sParameters> as RandomOracle>::Hasher<10>;
+
+/// State after [`faest_sign`] step 11: H₂⁽²⁾ with `chall1` and `ũ`, then VOLE `v` row hashes absorbed
+/// (before step 14, which hashes masked witness `d` to **chall2**).
+pub struct Faest192sChallenge2Hasher(pub(crate) Faest192sH2Hasher);
+
+impl core::fmt::Debug for Faest192sChallenge2Hasher {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Faest192sChallenge2Hasher(..)")
+    }
+}
+
 /// VOLE commitment result for FAEST-128f: `u` (long VOLE vector), `v` (constraint rows, same shape as
 /// Quicksilver `CstrntsVal`: Λ rows × `LHatBytes` bytes per row), batch `com`, and BAVC `decom`.
 #[allow(private_interfaces)]
@@ -389,6 +418,150 @@ pub const FAEST192S_HASH_MU_OUTPUT_BYTES: usize =
 pub fn faest192s_hash_mu(mu: &mut [u8], owf_input: &[u8], owf_output: &[u8], msg: &[u8]) {
     debug_assert_eq!(mu.len(), FAEST192S_HASH_MU_OUTPUT_BYTES);
     RO::<FAEST192sParameters>::hash_mu(mu, owf_input, owf_output, msg);
+}
+
+/// Length of **`r`** from [`faest192s_hash_r_iv`] (OWF `LambdaBytes` for FAEST-192s).
+pub const FAEST192S_HASH_R_OUTPUT_BYTES: usize =
+    <<FAEST192sParameters as FAESTParameters>::OWF as OWFParameters>::LambdaBytes::USIZE;
+
+/// Length of the IV / `iv_pre` buffer for [`faest192s_hash_r_iv`] and [`faest192s_hash_iv`].
+pub const FAEST192S_IV_BYTES: usize = IVSize::USIZE;
+
+/// FAEST-192s signing step 4: sample **`r`** and IV pre-state from H₃(owf_key ‖ μ ‖ ρ), same as [`faest_sign`].
+///
+/// `r` must be [`FAEST192S_HASH_R_OUTPUT_BYTES`], `iv_pre` must be [`FAEST192S_IV_BYTES`]. `key` is the
+/// 24-byte AES-128/192/256 key field (`owf_key`); `mu` is [`FAEST192S_HASH_MU_OUTPUT_BYTES`] bytes.
+pub fn faest192s_hash_r_iv(
+    r: &mut [u8],
+    iv_pre: &mut [u8],
+    key: &[u8],
+    mu: &[u8],
+    rho: &[u8],
+) {
+    debug_assert_eq!(r.len(), FAEST192S_HASH_R_OUTPUT_BYTES);
+    debug_assert_eq!(iv_pre.len(), FAEST192S_IV_BYTES);
+    let iv = GenericArray::from_mut_slice(iv_pre);
+    RO::<FAEST192sParameters>::hash_r_iv(r, iv, key, mu, rho);
+}
+
+/// FAEST-192s signing step 5: **iv** ← H₄(`iv_pre`), in place (overwrites `iv_pre`), same as [`faest_sign`].
+pub fn faest192s_hash_iv(iv_pre: &mut [u8]) -> IV {
+    debug_assert_eq!(iv_pre.len(), FAEST192S_IV_BYTES);
+    let iv = GenericArray::from_mut_slice(iv_pre);
+    RO::<FAEST192sParameters>::hash_iv(iv);
+    iv.to_owned()
+}
+
+/// Output length of **`chall1`** from [`faest192s_hash_challenge_1`] (FAEST H₂⁽¹⁾, `Chall1` for 192-bit).
+pub const FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES: usize =
+    <<Faest192sOwf as OWFParameters>::BaseParams as BaseParameters>::Chall1::USIZE;
+
+/// FAEST-192s signing step 8: **chall1** ← H₂⁽¹⁾(μ ‖ com ‖ cs ‖ iv), same as [`faest_sign`].
+pub fn faest192s_hash_challenge_1(
+    chall1: &mut [u8],
+    mu: &[u8],
+    hcom: &[u8],
+    c: &[u8],
+    iv: &[u8],
+) {
+    debug_assert_eq!(chall1.len(), FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES);
+    RO::<FAEST192sParameters>::hash_challenge_1(chall1, mu, hcom, c, iv);
+}
+
+/// Byte length of the `cs` region used by [`faest192s_volecommit`]: (`τ` − 1) blocks of `L̂` bytes, same
+/// as `signature.cs` in [`faest_sign`].
+pub const FAEST192S_VOLE_CS_BYTES: usize =
+    <Faest192sOwf as OWFParameters>::LHatBytes::USIZE
+        * (<<FAEST192sParameters as FAESTParameters>::Tau as TauParameters>::Tau::USIZE - 1);
+
+type Faest192sVoleCommitResultInner = VoleCommitResult<
+    <Faest192sBavc as BatchVectorCommitment>::LambdaBytes,
+    <Faest192sBavc as BatchVectorCommitment>::NLeafCommit,
+    Faest192sLHat,
+>;
+
+/// Opaque value returned by [`faest192s_volecommit`] (VOLE + BAVC); holds `com`, `decom`, `u`, `v`
+/// for the next signing steps.
+#[derive(Debug)]
+pub struct Faest192sVoleCommitProof(#[allow(dead_code)] pub(crate) Faest192sVoleCommitResultInner);
+
+impl Faest192sVoleCommitProof {
+    /// BAVC commitment **`com`** from [`volecommit`] (hashed into `chall1` in [`faest_sign`] step 8).
+    pub fn com(&self) -> &[u8] {
+        self.0.com.as_slice()
+    }
+}
+
+/// FAEST-192s signing step 10: hash VOLE vector **`u`** to **`ũ`** and write to `u_tilde` (same as
+/// `O::BaseParams::hash_u_vector` in [`faest_sign`]) using [`chall1`] from step 8.
+pub fn faest192s_hash_u_vector(
+    u_tilde: &mut [u8],
+    vole: &Faest192sVoleCommitProof,
+    chall1: &[u8; FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES],
+) {
+    debug_assert_eq!(u_tilde.len(), FAEST192S_U_TILDE_BYTES);
+    let chall1 = GenericArray::<u8, <Faest192sBP as BaseParameters>::Chall1>::from_slice(chall1);
+    <Faest192sBP as BaseParameters>::hash_u_vector(u_tilde, vole.0.u.as_ref(), chall1);
+}
+
+/// FAEST-192s signing step 11: H₂⁽²⁾ init on `chall1` and `ũ`, then row-wise hash of the VOLE `v`
+/// matrix (same as `faest_sign` after step 10).
+pub fn faest192s_hash_challenge_2_v_matrix(
+    chall1: &[u8; FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES],
+    u_tilde: &[u8; FAEST192S_U_TILDE_BYTES],
+    vole: &Faest192sVoleCommitProof,
+) -> Faest192sChallenge2Hasher {
+    let mut h2_hasher = RO::<FAEST192sParameters>::hash_challenge_2_init(
+        chall1.as_slice(),
+        u_tilde.as_slice(),
+    );
+    let chall1_ga = GenericArray::<u8, <Faest192sBP as BaseParameters>::Chall1>::from_slice(chall1);
+    <Faest192sBP as BaseParameters>::hash_v_matrix(&mut h2_hasher, vole.0.v.as_slice(), chall1_ga);
+    Faest192sChallenge2Hasher(h2_hasher)
+}
+
+/// FAEST-192s signing step 14: read **`chall2`** from the step-11 hasher after updating with masked
+/// witness `d` (same as [`faest_sign`] after the `v` matrix step).
+pub fn faest192s_hash_challenge_2_finalize(
+    hasher: Faest192sChallenge2Hasher,
+    d: &[u8],
+    chall2: &mut [u8; FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES],
+) {
+    RO::<FAEST192sParameters>::hash_challenge_2_finalize(hasher.0, chall2, d);
+}
+
+/// FAEST-192s signing step 13: **`d` ← `witness` ⊕ `u`** on the first `L` bytes of the VOLE vector `u`
+/// (same as [`SignatureRefMut::mask_witness`]). `witness` must be `L` bytes (extended witness).
+pub fn faest192s_mask_witness_d(
+    d: &mut [u8; FAEST192S_L_BYTES],
+    witness: &[u8],
+    vole: &Faest192sVoleCommitProof,
+) {
+    debug_assert_eq!(witness.len(), FAEST192S_L_BYTES);
+    let u = vole.0.u.as_ref().as_slice();
+    let l = <Faest192sOwf as OWFParameters>::LBytes::USIZE;
+    let u_prefix = &u[..l];
+    xor_arrays_into(&mut d[..], witness, u_prefix);
+}
+
+/// FAEST-192s signing step 7: [`volecommit`] (VOLE + BAVC), same as
+/// `volecommit::<P::BAVC, O::LHatBytes>(VoleCommitmentCRefMut::new(cs), &r, &iv)` in [`faest_sign`].
+///
+/// `cs` must be [`FAEST192S_VOLE_CS_BYTES`] and is filled in place (analogous to `signature.cs`). `r`
+/// and `iv` are the outputs from [`faest192s_hash_r_iv`] and [`faest192s_hash_iv`].
+pub fn faest192s_volecommit(
+    cs: &mut [u8],
+    r: &[u8; FAEST192S_HASH_R_OUTPUT_BYTES],
+    iv: &[u8; FAEST192S_IV_BYTES],
+) -> Faest192sVoleCommitProof {
+    debug_assert_eq!(cs.len(), FAEST192S_VOLE_CS_BYTES);
+    let r = GenericArray::from_slice(r as &[u8]);
+    let iv = GenericArray::from_slice(iv as &[u8]);
+    Faest192sVoleCommitProof(volecommit::<Faest192sBavc, Faest192sLHat>(
+        VoleCommitmentCRefMut::new(cs),
+        r,
+        iv,
+    ))
 }
 
 #[inline]
