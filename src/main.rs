@@ -147,14 +147,14 @@ fn main() {
     assert_ne!(vrf1.evaluation_key.to_bytes(), vrf3.evaluation_key.to_bytes(), "Different seed => different keypair");
     assert_ne!(vrf1.verification_key, vrf3.verification_key, "Different seed => different keypair");
 
-    let (vrf1_output1, _) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
-    let (vrf1_output2, _) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let (vrf1_output1, vrf1_proof) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let (vrf1_output2, vrf1_proof2) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
     assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");
     // vrf_proof_verify(&vrf1.verification_key, MESSAGE.as_bytes(), &vrf1_proof).expect("VRF public proof");
     // let (vrf2_output1, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
     // let (vrf2_output2, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
 
-    let (_vrf3_output1, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
+    let (vrf3_output1, vrf3_proof) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
     // let (vrf3_output2, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
 
     // assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");
