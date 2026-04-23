@@ -20,8 +20,8 @@ struct VRF {
     seed: u128,
     /// Single-block OWF keypair (`owf_output = E_k(owf_input)`); not a stock [`FAEST192sSigningKey`].
     evaluation_key: vrf::VrfFaest192sKeypair,
-    /// Same as [`vrf::VrfFaest192sKeypair::owf_output`] for the fixed `owf_input`.
-    verification_key: [u8; 16],
+    /// Public: fixed [`vrf::VrfFaest192sKeypair::owf_input`] and [`vrf::VrfFaest192sKeypair::owf_output`].
+    verification_key: vrf::VrfVerificationKey,
 }
 
 /// Returns a random 128-bit seed. Use [`rng_from_seed`] to regenerate the same randomness.
@@ -41,8 +41,7 @@ fn vrf_keygen() -> VRF {
     let seed = random_seed();
     let mut rng = rng_from_seed(seed);
     let keypair = vrf::vrf_keygen_with_rng(&mut rng);
-    let sk = keypair.to_bytes();
-    let verification_key: [u8; 16] = vrf::aes_evaluate_owf(&keypair, &sk[..16]);
+    let verification_key = keypair.compute_verification_key();
     println!("keypair: {:?}", keypair);
     println!("verification_key: {:?}", verification_key);
     VRF {
@@ -55,8 +54,7 @@ fn vrf_keygen() -> VRF {
 fn vrf_keygen_with_seed(seed: u128) -> VRF {
     let mut rng = rng_from_seed(seed);
     let keypair = vrf::vrf_keygen_with_rng(&mut rng);
-    let sk = keypair.to_bytes();
-    let verification_key: [u8; 16] = vrf::aes_evaluate_owf(&keypair, &sk[..16]);
+    let verification_key = keypair.compute_verification_key();
     println!("keypair: {:?}", keypair);
     println!("verification_key: {:?}", verification_key);
     VRF {
@@ -119,20 +117,20 @@ fn print_vrf_proof_public(prep: &Faest192sVrfProofPublic) {
 
 
 
-/*
-/// Recomputes `vrf_input` from `message` (same as [`vrf_evaluate`]) and checks μ + `chall1` on
-/// [`Faest192sVrfProofPublic`] (see [`FAEST192sVerificationKey::vrf_proof_verify`]).
+
+/// Recomputes `vrf_input` from `message` (same as [`vrf_evaluate`]) and runs [`vrf::vrf_proof_verify`].
 fn vrf_proof_verify(
-    verifying_key: &FAEST192sVerificationKey,
+    verifying_key: &vrf::VrfVerificationKey,
     message: &[u8],
-    proof: &Faest192sVrfProofPublic,
+    vrf_output: &[u8; 16],
+    proof: &vrf::VrfFaest192sProof,
 ) -> Result<(), faest::Error> {
     let vrf_input: [u8; 16] = Sha3_256::digest(message)[..16]
         .try_into()
         .unwrap();
-    verifying_key.vrf_proof_verify(&vrf_input, proof)
+    vrf::vrf_proof_verify(verifying_key, vrf_input, *vrf_output, proof)
 }
-*/
+
 
 fn main() {
     // Get a random seed once (e.g., save this to disk/DB to reproduce later)
@@ -147,14 +145,20 @@ fn main() {
     assert_ne!(vrf1.evaluation_key.to_bytes(), vrf3.evaluation_key.to_bytes(), "Different seed => different keypair");
     assert_ne!(vrf1.verification_key, vrf3.verification_key, "Different seed => different keypair");
 
-    let (vrf1_output1, vrf1_proof) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
-    let (vrf1_output2, vrf1_proof2) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let (vrf1_output1, _vrf1_proof) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    assert_eq!(
+        vrf1.verification_key.owf_output,
+        vrf1.evaluation_key.owf_output,
+        "vk carries the keypair OWF image"
+    );
+
+    let (vrf1_output2, _vrf1_proof2) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
     assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");
     // vrf_proof_verify(&vrf1.verification_key, MESSAGE.as_bytes(), &vrf1_proof).expect("VRF public proof");
     // let (vrf2_output1, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
     // let (vrf2_output2, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
 
-    let (vrf3_output1, vrf3_proof) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
+    let (_vrf3_output1, _vrf3_proof) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
     // let (vrf3_output2, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
 
     // assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");

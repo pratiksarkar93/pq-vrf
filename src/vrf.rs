@@ -30,6 +30,31 @@ impl VrfFaest192sKeypair {
         b[16..].copy_from_slice(&self.owf_key);
         b
     }
+
+    /// Public verification material: fixed OWF block **`owf_input`** and its one-block image
+    /// **`owf_output = E_{owf_key}(owf_input)`** (32 B, same as the first half of the FAEST-192s
+    /// public-key / **μ** prefix for the single-block VRF).
+    pub fn compute_verification_key(&self) -> VrfVerificationKey {
+        VrfVerificationKey {
+            owf_input: self.owf_input,
+            owf_output: self.owf_output,
+        }
+    }
+}
+
+/// Public (non-secret) data for the fixed single-block OWF: the plaintext and its 16 B image
+/// `E_{owf_key}(owf_input)`.
+///
+/// The first argument to **μ** in this VRF path is `owf_input` (as in stock FAEST); the 32 B block
+/// concatenated in [`vrf_evaluate_proof`] is **`owf_output` ‖ `vrf_output`**, not this struct’s
+/// fields concatenated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VrfVerificationKey {
+    /// Fixed 16-byte input to the single-block OWF / AES-PRF.
+    pub owf_input: [u8; 16],
+    /// `E_{owf_key}(owf_input)` — the first 16 B of the 32 B “public image” half that shares **μ** with
+    /// a VRF result block (see `pk_image` in [`vrf_evaluate_proof`]).
+    pub owf_output: [u8; 16],
 }
 
 /// One AES-192 block: **`E_{owf_key}(owf_input)`**.

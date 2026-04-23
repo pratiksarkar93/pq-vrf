@@ -740,6 +740,19 @@ pub fn faest192s_pack_signature(
     out
 }
 
+/// Grinding counter at the end of a FAEST-192s serial signature (4 bytes, little-endian), matching
+/// [`SignatureRef::parse_ctr`] in internal verify.
+pub fn faest192s_parse_signature_ctr(sig: &[u8]) -> Result<u32, Error> {
+    if sig.len() != FAEST192S_SIGNATURE_BYTES {
+        return Err(Error::new());
+    }
+    Ok(u32::from_le_bytes(
+        sig[FAEST192S_SIGNATURE_BYTES - 4..FAEST192S_SIGNATURE_BYTES]
+            .try_into()
+            .unwrap(),
+    ))
+}
+
 /// FAEST-192s signing step 7: [`volecommit`] (VOLE + BAVC), same as
 /// `volecommit::<P::BAVC, O::LHatBytes>(VoleCommitmentCRefMut::new(cs), &r, &iv)` in [`faest_sign`].
 ///

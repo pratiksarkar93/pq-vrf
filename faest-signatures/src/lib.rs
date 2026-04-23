@@ -148,7 +148,7 @@ pub use faest::{
     faest192s_hash_challenge_2_v_matrix, faest192s_hash_challenge_3_finalize,
     faest192s_hash_challenge_3_init, faest192s_hash_iv,
     faest192s_hash_mu, faest192s_hash_r_iv, faest192s_hash_u_vector, faest192s_mask_witness_d,
-    faest192s_pack_signature, faest192s_prove, faest192s_volecommit, Faest128fVoleCom, Faest128fVoleCommitResult,
+    faest192s_pack_signature, faest192s_parse_signature_ctr, faest192s_prove, faest192s_volecommit, Faest128fVoleCom, Faest128fVoleCommitResult,
     Faest128fVrfProofMaterial, Faest128fVrfProofPublic, Faest192sChall3GrindResult,
     Faest192sChallenge2Hasher,
     Faest192sChallenge3Hasher, Faest192sQuicksilverRound1, Faest192sVoleCommitProof,
