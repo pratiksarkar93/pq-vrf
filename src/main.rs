@@ -1,6 +1,5 @@
-mod vrf;
-
 use faest::{KeypairGenerator, *};
+use pq_vrf::vrf;
 use sha3::{Digest, Sha3_256};
 use rand::RngCore;
 use rand_chacha::ChaCha8Rng;
@@ -18,7 +17,7 @@ const MESSAGE: &str = "Hello, world!";
 // OWF192 two-plaintext extended witness (same key, `owf_input` + second plaintext): see
 // `faest::aes_extendedwitness192_vrf` and `faest::extend_witness_test_vrf` in `faest-signatures`.
 
-struct VRF {
+struct Vrf {
     seed: u128,
     /// Single-block OWF keypair (`owf_output = E_k(owf_input)`); not a stock [`FAEST192sSigningKey`].
     evaluation_key: vrf::VrfFaest192sKeypair,
@@ -39,31 +38,28 @@ fn rng_from_seed(seed: u128) -> ChaCha8Rng {
     ChaCha8Rng::from_seed(seed_bytes)
 }
  
-fn vrf_keygen() -> VRF {
+fn vrf_keygen() -> Vrf {
     let seed = random_seed();
     let mut rng = rng_from_seed(seed);
     let keypair = vrf::vrf_keygen_with_rng(&mut rng);
     let verification_key = keypair.compute_verification_key();
-    VRF {
+    Vrf {
         seed,
         evaluation_key: keypair,
         verification_key,
     }
 }
 
-fn vrf_keygen_with_seed(seed: u128) -> VRF {
+fn vrf_keygen_with_seed(seed: u128) -> Vrf {
     let mut rng = rng_from_seed(seed);
     let keypair = vrf::vrf_keygen_with_rng(&mut rng);
     let verification_key = keypair.compute_verification_key();
-    VRF {
+    Vrf {
         seed,
         evaluation_key: keypair,
         verification_key,
     }
 }
-
-// FAEST-192s VRF (`Faest192sVrfProofPublic`, `proof_vrf_public`, etc.) is not exposed in `faest`
-// yet — only FAEST-128f VRF types exist. Uncomment when 192s VRF is implemented.
 
 /// VRF input block = first 16 bytes of SHA3-256(message) (same as prove/verify and [`vrf_evaluate`]).
 fn vrf_input_from_message(message: &[u8]) -> [u8; 16] {
@@ -85,39 +81,6 @@ fn vrf_evaluate(
         .expect("vrf signature packing");
     (vrf_output, vrf_proof)
 }
-/*
-
-/// Prints [`Faest128fVrfProofPublic`] (VOLE `com` + `cs` + challenges; no full `u`/`v`/BAVC decommitment).
-fn print_vrf_proof_public(prep: &Faest192sVrfProofPublic) {
-    println!("--- VRF public proof (Faest192sVrfProofPublic) ---");
-    println!(
-        "  total payload: {} B (constant {} B)",
-        prep.total_bytes(),
-        FAEST192S_VRF_PROOF_PUBLIC_BYTES
-    );
-    println!("  mu (32 B):     {:02x?}", prep.mu.as_slice());
-    println!("  iv (16 B):     {:02x?}", prep.iv.as_slice());
-    println!("  vole_cs len:   {} B", prep.vole_cs.len());
-    println!("  vole_com:      {:02x?}", prep.vole_com.as_slice());
-    println!("  chall1:        {:02x?}", prep.chall1.as_slice());
-    println!("  u_tilde:       {:02x?}", prep.u_tilde.as_slice());
-    println!(
-        "  d (masked w):  {} B, first 24 B {:02x?}",
-        prep.d.len(),
-        &prep.d[..24.min(prep.d.len())]
-    );
-    println!("  chall2:        {:02x?}", prep.chall2.as_slice());
-    println!("  vrf_output y:  {:02x?}", prep.vrf_output.as_slice());
-    println!(
-        "  vrf_witness_compressed: {} B, first 24 B {:02x?}",
-        prep.vrf_witness_compressed.len(),
-        &prep.vrf_witness_compressed[..24.min(prep.vrf_witness_compressed.len())]
-    );
-    println!("--- end VRF public proof ---");
-}
-    */
-
-
 
 
 /// Recomputes `vrf_input` from `message` (same as [`vrf_evaluate`]) and runs [`vrf::vrf_proof_verify`].
@@ -235,19 +198,8 @@ fn main() {
         vrf::aes_evaluate_owf(&vrf1.evaluation_key, &vrf_input_from_message(MESSAGE.as_bytes())),
         "Same message => same VRF output"
     );
-    // let (vrf2_output1, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
-    // let (vrf2_output2, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
 
     let (_vrf3_output1, _vrf3_proof) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
-    // let (vrf3_output2, _) = vrf_evaluate(&vrf3.evaluation_key, MESSAGE.as_bytes());
-
-    // assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");
-    // assert_eq!(vrf2_output1, vrf2_output2, "Same message => same VRF output");
-    // assert_eq!(vrf1_output1, vrf2_output1, "Same seed => same VRF output on same message");
-
-    // assert_eq!(vrf3_output1, vrf3_output2, "Same seed => same VRF output on same message");
-
-    // assert_ne!(vrf1_output1, vrf3_output1, "Different Key message => Different VRF output");
 
     println!("Seed: {} (save this to regenerate the same keypair)", vrf1.seed);
 

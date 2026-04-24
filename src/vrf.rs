@@ -19,7 +19,7 @@ pub struct VrfFaest192sKeypair {
     pub owf_input: [u8; 16],
     pub owf_key: [u8; 24],
     /// `E_{owf_key}(owf_input)` from keygen: one AES-192 block encrypt of the sampled
-    /// `owf_input` (see [`vrf_keygen_with_rng`], [`aes_single_block_owf192`]).
+    /// `owf_input` (see [`vrf_keygen_with_rng`], `aes_single_block_owf192` in this module).
     pub owf_output: [u8; 16],
 }
 
@@ -58,8 +58,8 @@ pub struct VrfVerificationKey {
     pub owf_output: [u8; 16],
 }
 
-/// One AES-192 block: **`E_{owf_key}(owf_input)`**.
-pub fn aes_single_block_owf192(owf_key: &[u8; 24], owf_input: &[u8; 16]) -> [u8; 16] {
+/// One AES-192 block: **`E_{owf_key}(owf_input)`** (keygen and [`aes_evaluate_owf`] only).
+pub(crate) fn aes_single_block_owf192(owf_key: &[u8; 24], owf_input: &[u8; 16]) -> [u8; 16] {
     let mut out = [0u8; 16];
     let aes = Aes192Enc::new(GenericArray::from_slice(owf_key));
     aes.encrypt_block_b2b(
@@ -137,7 +137,7 @@ fn vrf_faest192s_chall2_from_hasher(
     chall2
 }
 
-/// Build the same transcript as internal [`faest::faest_sign`], with the VRF extended witness (two
+/// Build the same transcript as internal `faest_sign` in `faest-signatures`, with the VRF extended witness (two
 /// AES-192 evals) and a 32 B public image **`owf_output ‖ vrf_output`**. Returns a proof identical to
 /// a **FAEST-192s signature**; `vrf_input` / `vrf_output` are **not** included (the verifier has them
 /// when re-deriving μ and checking the VRF).

@@ -21,7 +21,7 @@ The core logic lives in [`src/vrf.rs`](src/vrf.rs). [`src/main.rs`](src/main.rs)
 1. **Key generation** — [`vrf_keygen_with_rng`](src/vrf.rs) (see `src/vrf.rs`):
    - **Sample `owf_key` (24 B):** fill from the RNG; resample until the low two bits of `owf_key[0]` are not both 1 (`owf_key[0] & 0b11 != 0b11`), matching FAEST OWF192 keygen.
    - **Sample `owf_input` (16 B)** uniformly at random.
-   - **Derive `owf_output` (16 B):** one **AES-192 block encryption** of `owf_input` under `owf_key` — the same single-block path as VRF PRF evaluation, but with the *keygen-time* random `owf_input` instead of a message-derived `vrf_input`. Concretely `owf_output = AES-192_encrypt(owf_key, owf_input)` (implemented as [`aes_single_block_owf192`](src/vrf.rs): `Aes192Enc`, one block in/out, not a mode over multiple blocks).
+   - **Derive `owf_output` (16 B):** one **AES-192 block encryption** of `owf_input` under `owf_key` — the same single-block path as VRF PRF evaluation, but with the *keygen-time* random `owf_input` instead of a message-derived `vrf_input`. Concretely `owf_output = AES-192_encrypt(owf_key, owf_input)` (single-block helper in `src/vrf.rs` using `Aes192Enc`; one block in/out, not a mode over multiple blocks).
    - `compute_verification_key()` returns only `owf_input` and `owf_output` (the secret is `owf_key`).
 
 2. **Evaluate (prover)** — Given `message`:
