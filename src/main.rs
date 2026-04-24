@@ -72,22 +72,13 @@ fn vrf_input_from_message(message: &[u8]) -> [u8; 16] {
         .expect("32-byte digest")
 }
 
-/// PRF: `vrf_input` (derived from `message`) → `vrf_output` (16-byte AES-192 under `keypair.owf_key`).
-fn vrf_evaluate_output_only(
-    keypair: &vrf::VrfFaest192sKeypair,
-    message: &[u8],
-) -> ([u8; 16], [u8; 16]) {
-    let vrf_input = vrf_input_from_message(message);
-    let vrf_output = vrf::aes_evaluate_owf(keypair, &vrf_input);
-    (vrf_input, vrf_output)
-}
-
 /// Full VRF: PRF + FAEST-192s proof (VOLE, Quicksilver, grind; expensive).
 fn vrf_evaluate(
     keypair: &vrf::VrfFaest192sKeypair,
     message: &[u8],
 ) -> ([u8; 16], vrf::VrfFaest192sProof) {
-    let (vrf_input, vrf_output) = vrf_evaluate_output_only(keypair, message);
+    let vrf_input = vrf_input_from_message(message);
+    let vrf_output = vrf::aes_evaluate_owf(keypair, &vrf_input);
     println!("vrf_input: {vrf_input:?}");
     println!("vrf_output: {vrf_output:?}");
     let vrf_proof = vrf::vrf_evaluate_proof(keypair, vrf_input, vrf_output, message, &[])
@@ -170,9 +161,10 @@ fn main() {
 
     // --- PRF only (hash + one AES) ---
     let t0 = Instant::now();
-    let (vrf_input_1, vrf1_output1) = vrf_evaluate_output_only(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let vrf_input_1 = vrf_input_from_message(MESSAGE.as_bytes());
+    let vrf1_output1 = vrf::aes_evaluate_owf(&vrf1.evaluation_key, &vrf_input_1);
     let vrf_eval_time = t0.elapsed();
-    println!("\n--- VRF PRF (evaluate output only) ---");
+    println!("\n--- VRF PRF (hash + AES) ---");
     println!("  {:?}  (vrf_input → vrf_output, no ZK proof)", vrf_eval_time);
     println!("  vrf_input:  {vrf_input_1:02x?}");
     println!("  vrf_output: {vrf1_output1:02x?}");

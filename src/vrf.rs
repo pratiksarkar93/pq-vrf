@@ -18,7 +18,8 @@ use rand_core::RngCore;
 pub struct VrfFaest192sKeypair {
     pub owf_input: [u8; 16],
     pub owf_key: [u8; 24],
-    /// `E_{owf_key}(owf_input)` — the only OWF output carried in this keypair.
+    /// `E_{owf_key}(owf_input)` from keygen: one AES-192 block encrypt of the sampled
+    /// `owf_input` (see [`vrf_keygen_with_rng`], [`aes_single_block_owf192`]).
     pub owf_output: [u8; 16],
 }
 
@@ -69,8 +70,10 @@ pub fn aes_single_block_owf192(owf_key: &[u8; 24], owf_input: &[u8; 16]) -> [u8;
 }
 
 /// Key generation (same RNG pattern as FAEST OWF192 keygen): sample `owf_key` until
-/// `owf_key[0] & 0b11 != 0b11`, sample `owf_input`, set **`owf_output = E_{owf_key}(owf_input)`**
-/// (single AES only).
+/// `owf_key[0] & 0b11 != 0b11`, sample random `owf_input`, then compute
+/// **`owf_output = aes_single_block_owf192(owf_key, owf_input)`** — a single AES-192 block
+/// encryption of the 16-byte `owf_input` under `owf_key` (16-byte ciphertext; same primitive as
+/// [`aes_evaluate_owf`] with `vrf_input` replaced by the keygen `owf_input`).
 pub fn vrf_keygen_with_rng(mut rng: impl RngCore) -> VrfFaest192sKeypair {
     let mut owf_key: GenericArray<u8, U24> = GenericArray::default();
 
