@@ -90,9 +90,8 @@ The following is **one** successful run of `cargo run --release`. Your output wi
 
 ### Machine used for the example timings
 
-
-
-|---|---|
+| Type | Specs |
+| --- | --- |
 | Model | MacBook Pro (`MacBookPro17,1`) |
 | Chip | Apple M1 |
 | Cores | 8 (4 performance + 4 efficiency) |
