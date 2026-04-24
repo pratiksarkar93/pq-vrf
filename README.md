@@ -91,7 +91,7 @@ The following is **one** successful run of `cargo run --release`. Your output wi
 ### Machine used for the example timings
 
 
-| | |
+
 |---|---|
 | Model | MacBook Pro (`MacBookPro17,1`) |
 | Chip | Apple M1 |
