@@ -98,4 +98,4 @@ The following is **one** successful run of `cargo run --release`. Your output wi
 | Memory | 16 GB |
 | OS | macOS 15.4.1 |
 
-Unique device identifiers are not listed here. Re-run `cargo run --release` on your own machine for comparable wall times.
+Re-run `cargo run --release` on your own machine for comparable wall times.
