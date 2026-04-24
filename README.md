@@ -5,6 +5,7 @@ The `src/` crate implements a **post-quantum verifiable random function (VRF)** 
 The core logic lives in [`src/vrf.rs`](src/vrf.rs). [`src/main.rs`](src/main.rs) is a runnable demo (keygen, PRF timing, prove, verify, comparison to stock FAEST-192s sign/verify).
 
 Paper: Coming Soon
+
 FAEST V2.0 Paper: https://faest.info/faest-spec-v2.0.pdf
 
 ## Objects (types)
