@@ -87,3 +87,16 @@ The following is **one** successful run of `cargo run --release`. Your output wi
 | VRF verify (`vrf_proof_verify`) | 268.2155 ms |
 | FAEST-192s sign | 271.872166 ms |
 | FAEST-192s verify | 264.407416 ms |
+
+### Machine used for the example timings
+
+
+| | |
+|---|---|
+| Model | MacBook Pro (`MacBookPro17,1`) |
+| Chip | Apple M1 |
+| Cores | 8 (4 performance + 4 efficiency) |
+| Memory | 16 GB |
+| OS | macOS 15.4.1 |
+
+Unique device identifiers are not listed here. Re-run `cargo run --release` on your own machine for comparable wall times.
