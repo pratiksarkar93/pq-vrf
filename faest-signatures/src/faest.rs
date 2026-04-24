@@ -30,6 +30,7 @@ use crate::{
         compress_faest128f_vrf_extendedwitness, FAEST128F_VRF_WITNESS_COMPRESSED_LEN,
     },
     witness_vrf::aes_extendedwitness_vrf,
+    zk_constraints::{aes_prove_owf192_vrf, aes_verify_owf192_vrf},
 };
 
 type RO<P> =
@@ -483,6 +484,15 @@ pub fn faest192s_hash_challenge_1(
     RO::<FAEST192sParameters>::hash_challenge_1(chall1, mu, hcom, c, iv);
 }
 
+/// H₂⁽²⁾ init: absorb **chall1** and **ũ** (before the VOLE `v` or `q` row hashes, same as internal [`verify`]).
+pub fn faest192s_hash_challenge_2_init(
+    chall1: &[u8; FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES],
+    u_tilde: &[u8; FAEST192S_U_TILDE_BYTES],
+) -> Faest192sChallenge2Hasher {
+    let h2 = RO::<FAEST192sParameters>::hash_challenge_2_init(chall1.as_slice(), u_tilde.as_slice());
+    Faest192sChallenge2Hasher(h2)
+}
+
 /// Byte length of the `cs` region used by [`faest192s_volecommit`]: (`τ` − 1) blocks of `L̂` bytes, same
 /// as `signature.cs` in [`faest_sign`].
 pub const FAEST192S_VOLE_CS_BYTES: usize =
@@ -526,10 +536,7 @@ pub fn faest192s_hash_challenge_2_v_matrix(
     u_tilde: &[u8; FAEST192S_U_TILDE_BYTES],
     vole: &Faest192sVoleCommitProof,
 ) -> Faest192sChallenge2Hasher {
-    let mut h2_hasher = RO::<FAEST192sParameters>::hash_challenge_2_init(
-        chall1.as_slice(),
-        u_tilde.as_slice(),
-    );
+    let mut h2_hasher = faest192s_hash_challenge_2_init(chall1, u_tilde).0;
     let chall1_ga = GenericArray::<u8, <Faest192sBP as BaseParameters>::Chall1>::from_slice(chall1);
     <Faest192sBP as BaseParameters>::hash_v_matrix(&mut h2_hasher, vole.0.v.as_slice(), chall1_ga);
     Faest192sChallenge2Hasher(h2_hasher)
@@ -573,9 +580,8 @@ pub struct Faest192sQuicksilverRound1 {
 /// FAEST-192s signing step 18: [`OWFParameters::prove`] (same as [`faest_sign`]: `a0_tilde`, `a1_tilde`, `a2_tilde` from `chall2`, VOLE `u` / `v`, and `pk = (owf_input, owf_output)`).
 ///
 /// The stock prover enforces the **standard** OWF192 circuit (second AES block in `owf_output` uses
-/// plaintext with `owf_input[0] ⊕ 1`). A witness from [`crate::witness_vrf::aes_extendedwitness192_vrf`]
-/// is **not** the same wire relation; a sound VRF over that witness needs a VRF Quicksilver path (see
-/// e.g. [`crate::zk_constraints_vrf::aes_prove_vrf_128f`]) for 128f, not this helper.
+/// plaintext with `owf_input[0] ⊕ 1`). For [`crate::witness_vrf::aes_extendedwitness192_vrf`], use
+/// [`faest192s_prove_vrf`] instead.
 pub fn faest192s_prove(
     witness: &GenericArray<u8, U312>,
     vole: &Faest192sVoleCommitProof,
@@ -606,6 +612,95 @@ pub fn faest192s_prove(
         a0_tilde,
         a1_tilde,
         a2_tilde,
+    }
+}
+
+/// Like [`faest192s_prove`], but Quicksilver matches [`crate::witness_vrf::aes_extendedwitness192_vrf`]
+/// (two AES blocks on `owf_input` and `vrf_input`).
+pub fn faest192s_prove_vrf(
+    witness: &GenericArray<u8, U312>,
+    vole: &Faest192sVoleCommitProof,
+    owf_input: &[u8; 16],
+    owf_output_pk: &[u8; 32],
+    chall2: &[u8; FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES],
+    vrf_input: &[u8; 16],
+) -> Faest192sQuicksilverRound1 {
+    type O = Faest192sOwf;
+    let u = vole.0.u.as_ref().as_slice();
+    let l = <O as OWFParameters>::LBytes::USIZE;
+    let l2 = <O as OWFParameters>::LambdaBytesTimes2::USIZE;
+    let u_tail = GenericArray::<u8, <O as OWFParameters>::LambdaBytesTimes2>::from_slice(
+        u[l..l + l2].as_ref(),
+    );
+    let pk = PublicKey {
+        owf_input: GenericArray::from_slice(owf_input as &[u8]).clone(),
+        owf_output: GenericArray::from_slice(owf_output_pk as &[u8]).clone(),
+    };
+    let chall2_ga = GenericArray::<u8, <Faest192sBP as BaseParameters>::Chall>::from_slice(chall2);
+    let vrf_ga = GenericArray::<u8, U16>::from_slice(vrf_input);
+    let (a0, a1, a2) = aes_prove_owf192_vrf(
+        witness,
+        u_tail,
+        vole.0.v.as_ref(),
+        &pk,
+        chall2_ga,
+        vrf_ga,
+    );
+    let mut a0_tilde = [0u8; FAEST192S_LAMBDA_BYTES];
+    let mut a1_tilde = [0u8; FAEST192S_LAMBDA_BYTES];
+    let mut a2_tilde = [0u8; FAEST192S_LAMBDA_BYTES];
+    a0_tilde.copy_from_slice(a0.as_bytes().as_slice());
+    a1_tilde.copy_from_slice(a1.as_bytes().as_slice());
+    a2_tilde.copy_from_slice(a2.as_bytes().as_slice());
+    Faest192sQuicksilverRound1 {
+        a0_tilde,
+        a1_tilde,
+        a2_tilde,
+    }
+}
+
+/// FAEST-192s VRF: Quicksilver verify (::17) and H₂⁽³⁾ check (::18–::19) for proofs from
+/// [`faest192s_prove_vrf`].
+pub fn faest192s_vrf_verify(
+    vole: &Faest192sVoleReconstruct,
+    d: &[u8; FAEST192S_L_BYTES],
+    owf_input: &[u8; 16],
+    pk_image: &[u8; 32],
+    chall2: &[u8; FAEST192S_HASH_CHALLENGE_2_OUTPUT_BYTES],
+    chall3: &[u8; FAEST192S_CHALL3_BYTES],
+    a1_tilde: &[u8; FAEST192S_LAMBDA_BYTES],
+    a2_tilde: &[u8; FAEST192S_LAMBDA_BYTES],
+    vrf_input: &[u8; 16],
+    grind_ctr: u32,
+) -> Result<(), Error> {
+    let pk = PublicKey {
+        owf_input: GenericArray::from_slice(owf_input as &[u8]).clone(),
+        owf_output: GenericArray::from_slice(pk_image as &[u8]).clone(),
+    };
+    let q = vole.inner.q.as_ref();
+    let a0 = aes_verify_owf192_vrf(
+        q,
+        GenericArray::from_slice(d),
+        &pk,
+        GenericArray::from_slice(chall2),
+        GenericArray::from_slice(chall3),
+        GenericArray::from_slice(a1_tilde),
+        GenericArray::from_slice(a2_tilde),
+        GenericArray::from_slice(vrf_input),
+    );
+    let mut chall3_prime = [0u8; FAEST192S_CHALL3_BYTES];
+    RO::<FAEST192sParameters>::hash_challenge_3(
+        &mut chall3_prime,
+        chall2.as_ref(),
+        a0.as_bytes().as_ref(),
+        a1_tilde.as_ref(),
+        a2_tilde.as_ref(),
+        grind_ctr,
+    );
+    if &chall3_prime == chall3 {
+        Ok(())
+    } else {
+        Err(Error::new())
     }
 }
 
@@ -751,6 +846,99 @@ pub fn faest192s_parse_signature_ctr(sig: &[u8]) -> Result<u32, Error> {
             .try_into()
             .unwrap(),
     ))
+}
+
+/// Pre-H₄ IV bytes from a FAEST-192s serial signature (the slot before the 4-byte `ctr` tail), matching
+/// [`SignatureRef::iv_pre`] in internal verify.
+pub fn faest192s_parse_signature_iv_pre(sig: &[u8]) -> Result<[u8; FAEST192S_IV_BYTES], Error> {
+    if sig.len() != FAEST192S_SIGNATURE_BYTES {
+        return Err(Error::new());
+    }
+    let start = FAEST192S_SIGNATURE_BYTES - 4 - FAEST192S_IV_BYTES;
+    let end = FAEST192S_SIGNATURE_BYTES - 4;
+    Ok(sig[start..end].try_into().unwrap())
+}
+
+fn faest192s_parse_decom_open(decom_i: &[u8]) -> BavcOpenResult<'_> {
+    let node_size = <Faest192sOwf as OWFParameters>::LambdaBytes::USIZE;
+    let n_coms = <Faest192sTau as TauParameters>::Tau::USIZE;
+    let com_size = <Faest192sOwf as OWFParameters>::NLeafCommit::USIZE
+        * <Faest192sOwf as OWFParameters>::LambdaBytes::USIZE;
+    let (commits, nodes) = decom_i.split_at(n_coms * com_size);
+    let coms = commits.chunks_exact(com_size).collect();
+    let nodes = nodes.chunks_exact(node_size).collect();
+    BavcOpenResult { coms, nodes }
+}
+
+/// Result of **::7–8** VOLE + BAVC reconstruction (same as [`verify`] on the commitment region).
+/// The VOLE matrix `q` is kept in internal form (same as internal `verify`’s `VoleReconstructResult::q`) for
+/// the following H₂⁽²⁾ and OWF steps; use [`Self::q_rows`] for a row-wise byte view.
+pub struct Faest192sVoleReconstruct {
+    inner: VoleReconstructResult<<Faest192sBavc as BatchVectorCommitment>::LambdaBytes, Faest192sLHat>,
+}
+
+impl Faest192sVoleReconstruct {
+    /// Reconstructed BAVC commitment `com` (2·λ bytes; matches `hash_challenge_1` input `hcom`).
+    pub fn com(&self) -> &[u8] {
+        self.inner.com.as_slice()
+    }
+    /// VOLE `q` as per-row L̂-byte slices (same order as `q.as_slice()` in internal [`verify`] for H₂⁽²⁾).
+    pub fn q_rows(&self) -> impl ExactSizeIterator<Item = &[u8]> + '_ {
+        self.inner
+            .q
+            .as_slice()
+            .iter()
+            .map(|row| row.as_slice())
+    }
+}
+
+/// Verify path (::12–14): after [`faest192s_hash_challenge_2_init`], hash reconstructed VOLE **`q`** rows
+/// (same as internal [`verify`] before **chall2**).
+pub fn faest192s_hash_challenge_2_q_matrix(
+    h2: Faest192sChallenge2Hasher,
+    vole: &Faest192sVoleReconstruct,
+    u_tilde: &[u8; FAEST192S_U_TILDE_BYTES],
+    chall1: &[u8; FAEST192S_HASH_CHALLENGE_1_OUTPUT_BYTES],
+    chall3: &[u8; FAEST192S_CHALL3_BYTES],
+) -> Faest192sChallenge2Hasher {
+    let mut h2 = h2.0;
+    let chall1_ga = GenericArray::<u8, <Faest192sBP as BaseParameters>::Chall1>::from_slice(chall1);
+    <Faest192sBP as BaseParameters>::hash_q_matrix(
+        &mut h2,
+        vole.inner.q.as_slice(),
+        u_tilde.as_slice(),
+        &chall1_ga,
+        <FAEST192sParameters as FAESTParameters>::decode_challenge_as_iter(chall3),
+    );
+    Faest192sChallenge2Hasher(h2)
+}
+
+/// ::7–8 VOLE reconstruct from a FAEST-192s serial signature: same as internal [`verify`]
+/// (`chall3` ‖ `decom_i` ‖ `cs` with post-H₄ **`iv`**).
+pub fn faest192s_volereconstruct(sig: &[u8], iv: &IV) -> Result<Faest192sVoleReconstruct, Error> {
+    if sig.len() != FAEST192S_SIGNATURE_BYTES {
+        return Err(Error::new());
+    }
+    let mut off = 0usize;
+    let ce = off + FAEST192S_VOLE_CS_BYTES;
+    let cs = &sig[off..ce];
+    off = ce;
+    off += FAEST192S_U_TILDE_BYTES;
+    off += FAEST192S_L_BYTES;
+    off += FAEST192S_LAMBDA_BYTES;
+    off += FAEST192S_LAMBDA_BYTES;
+    let de_end = off + FAEST192S_DECOM_I_BYTES;
+    let decom_i = &sig[off..de_end];
+    off = de_end;
+    let ch_end = off + FAEST192S_CHALL3_BYTES;
+    let chall3 = &sig[off..ch_end];
+
+    let decom_open = faest192s_parse_decom_open(decom_i);
+    let c = VoleCommitmentCRef::<Faest192sLHat>::new(cs);
+    let chall3 = GenericArray::from_slice(chall3);
+    let inner = volereconstruct::<Faest192sBavc, Faest192sLHat>(chall3, &decom_open, c, iv)
+        .ok_or(Error::new())?;
+    Ok(Faest192sVoleReconstruct { inner })
 }
 
 /// FAEST-192s signing step 7: [`volecommit`] (VOLE + BAVC), same as

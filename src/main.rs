@@ -5,7 +5,9 @@ use sha3::{Digest, Sha3_256};
 use rand::RngCore;
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
-use signature::Signer;
+use signature::{Signer, Verifier};
+use std::mem;
+use std::time::Instant;
 
 const MESSAGE: &str = "Hello, world!";
 
@@ -42,8 +44,6 @@ fn vrf_keygen() -> VRF {
     let mut rng = rng_from_seed(seed);
     let keypair = vrf::vrf_keygen_with_rng(&mut rng);
     let verification_key = keypair.compute_verification_key();
-    println!("keypair: {:?}", keypair);
-    println!("verification_key: {:?}", verification_key);
     VRF {
         seed,
         evaluation_key: keypair,
@@ -55,8 +55,6 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
     let mut rng = rng_from_seed(seed);
     let keypair = vrf::vrf_keygen_with_rng(&mut rng);
     let verification_key = keypair.compute_verification_key();
-    println!("keypair: {:?}", keypair);
-    println!("verification_key: {:?}", verification_key);
     VRF {
         seed,
         evaluation_key: keypair,
@@ -67,18 +65,31 @@ fn vrf_keygen_with_seed(seed: u128) -> VRF {
 // FAEST-192s VRF (`Faest192sVrfProofPublic`, `proof_vrf_public`, etc.) is not exposed in `faest`
 // yet — only FAEST-128f VRF types exist. Uncomment when 192s VRF is implemented.
 
+/// VRF input block = first 16 bytes of SHA3-256(message) (same as prove/verify and [`vrf_evaluate`]).
+fn vrf_input_from_message(message: &[u8]) -> [u8; 16] {
+    Sha3_256::digest(message)[..16]
+        .try_into()
+        .expect("32-byte digest")
+}
+
+/// PRF: `vrf_input` (derived from `message`) → `vrf_output` (16-byte AES-192 under `keypair.owf_key`).
+fn vrf_evaluate_output_only(
+    keypair: &vrf::VrfFaest192sKeypair,
+    message: &[u8],
+) -> ([u8; 16], [u8; 16]) {
+    let vrf_input = vrf_input_from_message(message);
+    let vrf_output = vrf::aes_evaluate_owf(keypair, &vrf_input);
+    (vrf_input, vrf_output)
+}
+
+/// Full VRF: PRF + FAEST-192s proof (VOLE, Quicksilver, grind; expensive).
 fn vrf_evaluate(
     keypair: &vrf::VrfFaest192sKeypair,
     message: &[u8],
 ) -> ([u8; 16], vrf::VrfFaest192sProof) {
-    // Hash message to 16 bytes for AES block input
-    let vrf_input: [u8; 16] = Sha3_256::digest(message)[..16]
-        .try_into()
-        .unwrap();
-
-    let vrf_output: [u8; 16] = vrf::aes_evaluate_owf(keypair, &vrf_input);
-    println!("vrf_input: {:?}", vrf_input);
-    println!("vrf_output: {:?}", vrf_output);
+    let (vrf_input, vrf_output) = vrf_evaluate_output_only(keypair, message);
+    println!("vrf_input: {vrf_input:?}");
+    println!("vrf_output: {vrf_output:?}");
     let vrf_proof = vrf::vrf_evaluate_proof(keypair, vrf_input, vrf_output, message, &[])
         .expect("vrf signature packing");
     (vrf_output, vrf_proof)
@@ -125,10 +136,8 @@ fn vrf_proof_verify(
     vrf_output: &[u8; 16],
     proof: &vrf::VrfFaest192sProof,
 ) -> Result<(), faest::Error> {
-    let vrf_input: [u8; 16] = Sha3_256::digest(message)[..16]
-        .try_into()
-        .unwrap();
-    vrf::vrf_proof_verify(verifying_key, vrf_input, *vrf_output, proof)
+    let vrf_input = vrf_input_from_message(message);
+    vrf::vrf_proof_verify(verifying_key, vrf_input, *vrf_output, message, proof)
 }
 
 
@@ -145,16 +154,95 @@ fn main() {
     assert_ne!(vrf1.evaluation_key.to_bytes(), vrf3.evaluation_key.to_bytes(), "Different seed => different keypair");
     assert_ne!(vrf1.verification_key, vrf3.verification_key, "Different seed => different keypair");
 
-    let (vrf1_output1, _vrf1_proof) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    // --- Sizes (see also `VrfFaest192sProof` = FAEST-192s packed signature) ---
+    const VRF_IO_BYTES: usize = 16;
+    println!("\n--- VRF type sizes (bytes) ---");
+    println!(
+        "  vrf verification_key:  {}  (VrfVerificationKey: owf_input + owf_output)",
+        mem::size_of::<vrf::VrfVerificationKey>()
+    );
+    println!("  vrf_input:            {VRF_IO_BYTES}  (AES block, derived from message)");
+    println!("  vrf_output:            {VRF_IO_BYTES}  (AES-PRF output)");
+    println!(
+        "  vrf_proof:            {}  (FAEST192S_SIGNATURE_BYTES; same as VrfFaest192sProof)",
+        FAEST192S_SIGNATURE_BYTES
+    );
+
+    // --- PRF only (hash + one AES) ---
+    let t0 = Instant::now();
+    let (vrf_input_1, vrf1_output1) = vrf_evaluate_output_only(&vrf1.evaluation_key, MESSAGE.as_bytes());
+    let vrf_eval_time = t0.elapsed();
+    println!("\n--- VRF PRF (evaluate output only) ---");
+    println!("  {:?}  (vrf_input → vrf_output, no ZK proof)", vrf_eval_time);
+    println!("  vrf_input:  {vrf_input_1:02x?}");
+    println!("  vrf_output: {vrf1_output1:02x?}");
     assert_eq!(
         vrf1.verification_key.owf_output,
         vrf1.evaluation_key.owf_output,
         "vk carries the keypair OWF image"
     );
 
-    let (vrf1_output2, _vrf1_proof2) = vrf_evaluate(&vrf1.evaluation_key, MESSAGE.as_bytes());
-    assert_eq!(vrf1_output1, vrf1_output2, "Same message => same VRF output");
-    // vrf_proof_verify(&vrf1.verification_key, MESSAGE.as_bytes(), &vrf1_proof).expect("VRF public proof");
+    // --- Prove (FAEST-192s-style signature / VRF proof) ---
+    let t1 = Instant::now();
+    let vrf1_proof = vrf::vrf_evaluate_proof(
+        &vrf1.evaluation_key,
+        vrf_input_1,
+        vrf1_output1,
+        MESSAGE.as_bytes(),
+        &[],
+    )
+    .expect("vrf signature packing");
+    let vrf_prove_time = t1.elapsed();
+    assert_eq!(vrf1_proof.as_ref().len(), FAEST192S_SIGNATURE_BYTES);
+    println!("\n--- VRF prove (vrf_evaluate_proof) ---");
+    println!("  {vrf_prove_time:?}  (VOLE, Quicksilver, grind chall3, pack)");
+
+    // --- Verify ---
+    let t2 = Instant::now();
+    vrf_proof_verify(
+        &vrf1.verification_key,
+        MESSAGE.as_bytes(),
+        &vrf1_output1,
+        &vrf1_proof,
+    )
+    .expect("VRF proof verifies (owf_input, pk_image, VRF Quicksilver)");
+    let vrf_verify_time = t2.elapsed();
+    println!("\n--- VRF verify (vrf_proof_verify) ---");
+    println!("  {vrf_verify_time:?}  (reconstruct q, H₂, Quicksilver+chall3 check)");
+
+    // --- Stock FAEST-192s on the same message (sign / verify) — comparable proof size, standard OWF192 ---
+    let mut sk_faest = rand::thread_rng();
+    let faest_sk = FAEST192sSigningKey::generate(&mut sk_faest);
+    let faest_vk = faest_sk.verifying_key();
+
+    let t_fs = Instant::now();
+    let faest_sig: FAEST192sSignature = faest_sk.sign(MESSAGE.as_bytes());
+    let faest_sign_time = t_fs.elapsed();
+
+    let t_fv = Instant::now();
+    assert!(faest_vk
+        .verify(MESSAGE.as_bytes(), &faest_sig)
+        .is_ok());
+    let faest_verify_time = t_fv.elapsed();
+
+    println!("\n--- Stock FAEST-192s (same message) ---");
+    println!(
+        "  sign:   {faest_sign_time:?}  (witness + VOLE + stock Quicksilver + grind; {} B sig)",
+        faest_sig.as_ref().len()
+    );
+    println!("  verify: {faest_verify_time:?}  (standard FAEST-192s verify path)");
+
+    println!("\n--- VRF vs FAEST-192s (wall time) ---");
+    println!("  VRF PRF only (hash + AES):     {vrf_eval_time:?}");
+    println!("  VRF prove (vrf_evaluate_proof): {vrf_prove_time:?}  |  FAEST sign: {faest_sign_time:?}");
+    println!("  VRF verify:                     {vrf_verify_time:?}  |  FAEST verify: {faest_verify_time:?}");
+
+    // Same VRF input/output (AES-PRF is deterministic).
+    assert_eq!(
+        vrf1_output1,
+        vrf::aes_evaluate_owf(&vrf1.evaluation_key, &vrf_input_from_message(MESSAGE.as_bytes())),
+        "Same message => same VRF output"
+    );
     // let (vrf2_output1, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
     // let (vrf2_output2, _) = vrf_evaluate(&vrf2.evaluation_key, MESSAGE.as_bytes());
 
@@ -175,13 +263,4 @@ fn main() {
     assert_eq!(vrf1.evaluation_key.to_bytes(), vrf2.evaluation_key.to_bytes(), "Same seed => same keypair");
 
     assert_eq!(vrf1.verification_key, vrf2.verification_key, "Same seed => same keypair");
-
-    // Stock FAEST signing requires [`FAEST192sSigningKey`] with full OWF192; single-block keys above do not.
-    let mut sk_faest = rand::thread_rng();
-    let faest_sk = FAEST192sSigningKey::generate(&mut sk_faest);
-    let signature: FAEST192sSignature = faest_sk.sign(MESSAGE.as_bytes());
-    assert!(faest_sk
-        .verifying_key()
-        .verify(MESSAGE.as_bytes(), &signature)
-        .is_ok());
 }

@@ -7,4 +7,4 @@ pub(crate) mod owf_constraints;
 
 pub(crate) use byte_commitments::{ByteCommits, ByteCommitsRef};
 use field_commitment::{FieldCommitDegOne, FieldCommitDegThree, FieldCommitDegTwo};
-pub(crate) use owf_constraints::owf_constraints;
+pub(crate) use owf_constraints::{owf_constraints, owf_constraints_owf192_vrf};

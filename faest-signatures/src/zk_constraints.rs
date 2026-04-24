@@ -1,12 +1,15 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
-use generic_array::{GenericArray, typenum::Unsigned};
+use generic_array::{
+    GenericArray,
+    typenum::{U16, Unsigned},
+};
 
 use crate::{
-    fields::{Square, SumPoly},
+    fields::{GF192, Square, SumPoly},
     internal_keys::PublicKey,
-    parameter::{BaseParameters, OWFField, OWFParameters, QSProof},
+    parameter::{BaseParameters, OWF192, OWFField, OWFParameters, QSProof},
     prover::{self, byte_commitments::ByteCommitsRef},
     universal_hashing::ZKHasherInit,
     utils::get_bit,
@@ -73,6 +76,50 @@ where
     zk_hasher.finalize(&v0_star, &(u0_star + v1_star), &u1_star)
 }
 
+/// Quicksilver **prove** for [`crate::witness_vrf::aes_extendedwitness192_vrf`].
+pub(crate) fn aes_prove_owf192_vrf(
+    w: &GenericArray<u8, <OWF192<GF192> as OWFParameters>::LBytes>,
+    u: &GenericArray<u8, <OWF192<GF192> as OWFParameters>::LambdaBytesTimes2>,
+    v: CstrntsVal<OWF192<GF192>>,
+    pk: &PublicKey<OWF192<GF192>>,
+    chall_2: &GenericArray<
+        u8,
+        <<OWF192<GF192> as OWFParameters>::BaseParams as BaseParameters>::Chall,
+    >,
+    vrf_input: &GenericArray<u8, U16>,
+) -> QSProof<OWF192<GF192>> {
+    type O192 = OWF192<GF192>;
+    let mut zk_hasher =
+        <<O192 as OWFParameters>::BaseParams as BaseParameters>::ZKHasher::new_zk_proof_hasher(
+            chall_2,
+        );
+
+    let v = reshape_and_to_field::<O192>(v);
+
+    let u0_star = OWFField::<O192>::sum_poly_bits(&u[..<O192 as OWFParameters>::LambdaBytes::USIZE]);
+    let u1_star = OWFField::<O192>::sum_poly_bits(
+        &u[<O192 as OWFParameters>::LambdaBytes::USIZE..],
+    );
+
+    let v0_star = OWFField::<O192>::sum_poly(
+        &v[<O192 as OWFParameters>::L::USIZE
+            ..<O192 as OWFParameters>::L::USIZE + <O192 as OWFParameters>::Lambda::USIZE],
+    );
+    let v1_star = OWFField::<O192>::sum_poly(
+        &v[<O192 as OWFParameters>::L::USIZE + <O192 as OWFParameters>::Lambda::USIZE..
+            <O192 as OWFParameters>::L::USIZE + <O192 as OWFParameters>::Lambda::USIZE * 2],
+    );
+
+    prover::owf_constraints_owf192_vrf(
+        &mut zk_hasher,
+        ByteCommitsRef::from_slices(w, &v[..<O192 as OWFParameters>::L::USIZE]),
+        pk,
+        vrf_input,
+    );
+
+    zk_hasher.finalize(&v0_star, &(u0_star + v1_star), &u1_star)
+}
+
 pub(crate) fn aes_verify<O>(
     q: CstrntsVal<O>,
     d: &GenericArray<u8, O::LBytes>,
@@ -123,4 +170,56 @@ where
     let q_tilde = zk_hasher.finalize(&q_star);
 
     q_tilde - delta * OWFField::<O>::from(a1_tilde) - delta.square() * OWFField::<O>::from(a2_tilde)
+}
+
+/// Quicksilver **verify** for [`crate::witness_vrf::aes_extendedwitness192_vrf`].
+pub(crate) fn aes_verify_owf192_vrf(
+    q: CstrntsVal<OWF192<GF192>>,
+    d: &GenericArray<u8, <OWF192<GF192> as OWFParameters>::LBytes>,
+    pk: &PublicKey<OWF192<GF192>>,
+    chall_2: &GenericArray<
+        u8,
+        <<OWF192<GF192> as OWFParameters>::BaseParams as BaseParameters>::Chall,
+    >,
+    chall_3: &GenericArray<u8, <OWF192<GF192> as OWFParameters>::LambdaBytes>,
+    a1_tilde: &GenericArray<u8, <OWF192<GF192> as OWFParameters>::LambdaBytes>,
+    a2_tilde: &GenericArray<u8, <OWF192<GF192> as OWFParameters>::LambdaBytes>,
+    vrf_input: &GenericArray<u8, U16>,
+) -> OWFField<OWF192<GF192>> {
+    type O192 = OWF192<GF192>;
+    let delta = OWFField::<O192>::from(chall_3.as_slice());
+    let mut q = reshape_and_to_field::<O192>(q);
+    for (i, q_i) in q.iter_mut().take(<O192 as OWFParameters>::L::USIZE).enumerate() {
+        if get_bit(d, i) != 0 {
+            *q_i += delta;
+        }
+    }
+    let w = VoleCommitsRef {
+        scalars: GenericArray::from_slice(&q[..<O192 as OWFParameters>::L::USIZE]),
+        delta: &delta,
+    };
+    let q0_star = OWFField::<O192>::sum_poly(
+        &q[<O192 as OWFParameters>::L::USIZE
+            ..<O192 as OWFParameters>::L::USIZE + <O192 as OWFParameters>::Lambda::USIZE],
+    );
+    let q1_star = OWFField::<O192>::sum_poly(
+        &q[<O192 as OWFParameters>::L::USIZE + <O192 as OWFParameters>::Lambda::USIZE..
+            <O192 as OWFParameters>::L::USIZE + <O192 as OWFParameters>::Lambda::USIZE * 2],
+    );
+    let q_star = delta * q1_star + q0_star;
+    let mut zk_hasher =
+        <<O192 as OWFParameters>::BaseParams as BaseParameters>::ZKHasher::new_zk_verify_hasher(
+            chall_2, delta,
+        );
+    verifier::owf_constraints_owf192_vrf(
+        &mut zk_hasher,
+        w,
+        &delta,
+        pk,
+        vrf_input,
+    );
+    let q_tilde = zk_hasher.finalize(&q_star);
+    q_tilde
+        - delta * OWFField::<O192>::from(a1_tilde.as_slice())
+        - delta.square() * OWFField::<O192>::from(a2_tilde.as_slice())
 }
