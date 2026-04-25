@@ -1,10 +1,10 @@
-# FAEST-192s VRF (pq-vrf)
+# Obsidus VRF (pq-VRF from FAEST-192s)
 
 The `src/` crate implements a **post-quantum verifiable random function (VRF)** whose outputs and proofs are tied to **FAEST-192s**: the prover runs the same VOLE → Quicksilver → grind pipeline as a standard FAEST-192s signature, but the one-way function inside the zero-knowledge proof is the **VRF OWF192** path (two AES-192 evaluations in a single extended witness), not the stock single-OWF signing circuit.
 
 The core logic lives in [`src/vrf.rs`](src/vrf.rs). [`src/main.rs`](src/main.rs) is a runnable demo (keygen, PRF timing, prove, verify, comparison to stock FAEST-192s sign/verify).
 
-Paper: Coming Soon
+Obsidus VRF Paper: Coming Soon
 
 FAEST V2.0 Paper: https://faest.info/faest-spec-v2.0.pdf
 
